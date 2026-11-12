@@ -8,12 +8,12 @@ kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Di
 
 | Fitur | Status |
 |---|---|
-| Pilih kamera sumber + resolusi, mirror | ✅ |
-| Output ke virtual camera bernama **AlapCamera** (fallback: OBS Virtual Camera) | ✅ |
-| **Auto visual enhance** – auto exposure berbasis wajah (AI), low-light boost, auto white balance, denoise, sharpen | ✅ |
-| **AI background** – blur, hapus (warna solid / green screen), ganti gambar | ✅ |
-| **Compare (Before/After)** – mode split-screen untuk melihat perbandingan sebelum & sesudah secara langsung | ✅ |
-| **Auto-save settings** – pengaturan kamera, resolusi, enhance, dan background otomatis tersimpan | ✅ |
+| Deteksi kamera fisik otomatis & jalan di FPS asli (native FPS) | ✅ |
+| **Auto-Start Virtual Camera (`AlapCamera`)** – otomatis terdaftar & langsung terdeteksi di Streamlabs / OBS tanpa perlu klik Start atau izin Admin | ✅ |
+| **AI Auto Visual Enhance** – otomatis mencerahkan wajah di ruangan gelap/backlight & menyeimbangkan warna (< 0.5 ms per frame via LUT) | ✅ |
+| **Erase Background (No Background)** – hapus latar belakang otomatis tanpa kain green screen (*PNG Cutout*, *Virtual Green Screen*, atau *Blur*) | ✅ |
+| **Split Compare (Before/After)** – mode split-screen untuk melihat perbandingan sebelum & sesudah secara langsung | ✅ |
+| **Auto-save settings** – pengaturan kamera, enhance, dan background otomatis tersimpan | ✅ |
 
 ### Auto visual enhance
 

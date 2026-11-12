@@ -16,11 +16,13 @@ _BACKEND = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
 class CameraInfo:
     index: int
     name: str
-    width: int
-    height: int
+    width: int = 0
+    height: int = 0
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.width}x{self.height})"
+        if self.width > 0 and self.height > 0:
+            return f"{self.name} ({self.width}x{self.height})"
+        return self.name
 
 
 def device_names() -> list[str]:
@@ -34,17 +36,31 @@ def device_names() -> list[str]:
         return []
 
 
-# our own output device must never be used as an input (feedback loop)
-OWN_DEVICE_NAMES = ("AlapCamera",)
+# Virtual output sinks that should never be offered as camera inputs
+_VIRTUAL_SINKS = (
+    "alapcamera",
+    "streamlabs",
+    "lsvcam",
+    "bytecast",
+    "unity video capture",
+    "obs virtual",
+    "xsplit",
+    "manycam",
+    "snap camera",
+)
 
-# phone-bridge / software cameras: still selectable, but not picked by default
-_SOFTWARE_HINTS = ("virtual", "camo", "droidcam", "iriun", "obs", "streamlabs",
-                   "bytecast", "unity", "xsplit", "snap camera", "manycam", "lsvcam")
+# Phone-bridge / secondary software cameras: selectable, but hardware cameras are preferred first
+_SOFTWARE_HINTS = ("virtual", "camo", "droidcam", "iriun")
+
+
+def is_virtual_sink(name: str) -> bool:
+    n = name.lower()
+    return any(s in n for s in _VIRTUAL_SINKS)
 
 
 def is_software_camera(name: str) -> bool:
     n = name.lower()
-    return any(h in n for h in _SOFTWARE_HINTS)
+    return is_virtual_sink(name) or any(h in n for h in _SOFTWARE_HINTS)
 
 
 def default_camera(cams: list["CameraInfo"]) -> int:
@@ -55,15 +71,18 @@ def default_camera(cams: list["CameraInfo"]) -> int:
     return 0 if cams else -1
 
 
-def list_cameras(max_index: int = 10) -> list[CameraInfo]:
-    """Probe camera indices and return the ones that deliver frames."""
+def list_cameras(max_index: int = 6) -> list[CameraInfo]:
+    """Return available input cameras instantly via DirectShow (or probe fallback)."""
     names = device_names()
-    count = len(names) if names else max_index
+    if names:
+        return [
+            CameraInfo(idx, name)
+            for idx, name in enumerate(names)
+            if not is_virtual_sink(name)
+        ]
+
     found: list[CameraInfo] = []
-    for idx in range(count):
-        name = names[idx] if idx < len(names) else f"Camera {idx}"
-        if any(own.lower() in name.lower() for own in OWN_DEVICE_NAMES):
-            continue
+    for idx in range(max_index):
         cap = cv2.VideoCapture(idx, _BACKEND)
         if not cap.isOpened():
             cap.release()
@@ -71,7 +90,7 @@ def list_cameras(max_index: int = 10) -> list[CameraInfo]:
         ok, frame = cap.read()
         if ok and frame is not None:
             h, w = frame.shape[:2]
-            found.append(CameraInfo(idx, name, w, h))
+            found.append(CameraInfo(idx, f"Camera {idx}", w, h))
         cap.release()
     return found
 
@@ -80,15 +99,19 @@ class CameraStream:
     """Grabs frames from a physical camera at its native resolution & full FPS.
 
     Avoids forcing non-native resolutions on USB 2.0 webcams (which drops
-    hardware frame rate from 30 fps to ~7.5 fps) and automatically calibrates
-    DirectShow sensor black-level/exposure so dark rooms never clip to black.
+    hardware frame rate from 30 fps to ~7.5 fps), automatically calibrates
+    DirectShow sensor black-level/exposure so dark rooms never clip to black,
+    and auto-reconnects if another app (e.g. Streamlabs) is temporarily holding
+    the physical webcam.
     """
 
-    def __init__(self, index: int, width: int | None = None, height: int | None = None):
+    def __init__(self, index: int, width: int | None = None, height: int | None = None, name: str = ""):
         self.index = index
+        self.name = name or f"Camera {index}"
         self.req_width = width
         self.req_height = height
         self.auto_tune_sensor = True
+        self.is_busy = False
         self._cap: cv2.VideoCapture | None = None
         self._frame: np.ndarray | None = None
         self._lock = threading.Lock()
@@ -108,10 +131,11 @@ class CameraStream:
                     int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480)
         return (self.req_width or 640, self.req_height or 480)
 
-    def start(self) -> "CameraStream":
+    def _open_device(self) -> bool:
         cap = cv2.VideoCapture(self.index, _BACKEND)
         if not cap.isOpened():
-            raise RuntimeError(f"Cannot open camera {self.index}")
+            cap.release()
+            return False
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if self.req_width and self.req_height:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -124,15 +148,37 @@ class CameraStream:
                 cap.set(cv2.CAP_PROP_CONTRAST, 12.0)
         except Exception:
             pass
-        # Read one initial frame so size is known immediately
         ok, first = cap.read()
-        if ok and first is not None:
+        if not ok or first is None:
+            cap.release()
+            return False
+        try:
+            self._cap = cap
+            self._tune_sensor(first)
+        except Exception:
+            pass
+        with self._lock:
             self._frame = first
-            try:
-                self._tune_sensor(first)
-            except Exception:
-                pass
-        self._cap = cap
+        self.is_busy = False
+        self._new_frame.set()
+        return True
+
+    def _make_busy_frame(self) -> np.ndarray:
+        img = np.full((480, 640, 3), (20, 15, 13), dtype=np.uint8)
+        cv2.putText(img, f"Kamera '{self.name}' sedang dipakai aplikasi lain",
+                    (42, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (129, 140, 248), 2, cv2.LINE_AA)
+        cv2.putText(img, "Di Streamlabs / OBS, ganti Device ke 'AlapCamera'",
+                    (58, 245), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (240, 240, 240), 1, cv2.LINE_AA)
+        cv2.putText(img, "Kamera akan tersambung otomatis begitu dilepas...",
+                    (72, 285), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (156, 163, 175), 1, cv2.LINE_AA)
+        return img
+
+    def start(self) -> "CameraStream":
+        if not self._open_device():
+            self.is_busy = True
+            with self._lock:
+                self._frame = self._make_busy_frame()
+            self._new_frame.set()
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -165,10 +211,16 @@ class CameraStream:
                 self._cap.set(cv2.CAP_PROP_EXPOSURE, cur_exp - 1.0)
 
     def _loop(self) -> None:
-        while self._running and self._cap is not None:
+        while self._running:
+            if self._cap is None:
+                self._new_frame.set()
+                time.sleep(1.2)
+                if self._running:
+                    self._open_device()
+                continue
             ok, frame = self._cap.read()
-            if not ok:
-                time.sleep(0.005)
+            if not ok or frame is None:
+                time.sleep(0.01)
                 continue
             self._tick += 1
             if self._tick in (3, 10, 22) or self._tick % 60 == 0:
@@ -182,7 +234,8 @@ class CameraStream:
 
     def wait_read(self, timeout: float = 0.05) -> np.ndarray | None:
         """Wait for the next fresh camera frame and return a copy."""
-        self._new_frame.wait(timeout=timeout)
+        if not self._new_frame.wait(timeout=timeout):
+            return None
         self._new_frame.clear()
         with self._lock:
             return None if self._frame is None else self._frame.copy()

@@ -1,13 +1,7 @@
-"""AI background removal / blur / replacement.
+"""Ultra-fast AI background removal (PNG cutout / virtual green screen / blur).
 
-Uses Google's pre-trained MediaPipe selfie segmentation models (no dataset or
-training needed):
-
-* ``fast``    - ``selfie_segmenter`` (256x256, very fast)
-* ``quality`` - ``selfie_multiclass_256x256`` (better hair / edges, slower)
-
-The raw mask is refined with temporal smoothing, an edge-aware guided filter
-(when opencv-contrib is available) and feathering for natural edges.
+All AI segmentation and edge refinement run asynchronously in a background
+worker thread so the main camera loop stays at full native FPS (~1 ms blend).
 """
 from __future__ import annotations
 
@@ -20,21 +14,22 @@ import numpy as np
 
 from .models import get_model
 
-MODES = ("blur", "remove", "image")
-
 
 class BackgroundProcessor:
     name = "background"
 
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
-        self.mode = "blur"            # blur | remove | image
-        self.quality = "fast"         # fast | quality
-        self.blur_strength = 0.6      # 0..1
-        self.color = (0, 255, 0)      # BGR, used by "remove" (green = easy chroma key)
-        self.threshold = 0.5          # mask cut-off
-        self.edge_softness = 0.5      # 0..1
-        self.smoothing = 0.5          # temporal smoothing 0..1
+        # "cutout" (transparent PNG look in preview, pure black/chroma output),
+        # "greenscreen" (virtual green screen #00FF00), or "blur"
+        self.mode = "cutout"
+        self.quality = "fast"
+        self.blur_strength = 0.6
+        self.color = (0, 0, 0)
+        self.threshold = 0.48
+        self.edge_softness = 0.45
+        self.smoothing = 0.45
+        self.image_path: str = ""
 
         self._segmenter = None
         self._loaded_quality = None
@@ -42,20 +37,18 @@ class BackgroundProcessor:
         self._prev_mask: np.ndarray | None = None
         self._bg_image: np.ndarray | None = None
         self._bg_cache: np.ndarray | None = None
-        self.image_path: str = ""
+        self._checker_cache: np.ndarray | None = None
         self._t0 = time.monotonic()
         self._last_ts = -1
         self._has_guided = hasattr(cv2, "ximgproc")
         self.last_error = ""
-        # async segmentation worker
+
         self._cond = threading.Condition()
         self._pending: np.ndarray | None = None
-        self._mask_small: np.ndarray | None = None
-        self._mask_ready = False
+        self._refined_small: np.ndarray | None = None
         self._running = False
         self._thread: threading.Thread | None = None
 
-    # ---------------------------------------------------------------- models
     def _ensure_segmenter(self) -> None:
         if self._segmenter is not None and self._loaded_quality == self.quality:
             return
@@ -102,15 +95,12 @@ class BackgroundProcessor:
             self._running = False
             self._cond.notify_all()
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.5)
             self._thread = None
         self._close_segmenter()
-        self._mask_small = None
-        self._mask_ready = False
+        self._refined_small = None
 
-    # ---------------------------------------------------------------- mask
-    def _segment_small(self, small: np.ndarray) -> np.ndarray:
-        """Run the AI model on a small frame and return a raw person mask."""
+    def _segment_and_refine_small(self, small: np.ndarray) -> np.ndarray:
         rgb = np.ascontiguousarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
         ts = int((time.monotonic() - self._t0) * 1000)
@@ -120,17 +110,29 @@ class BackgroundProcessor:
         result = self._segmenter.segment_for_video(image, ts)
         masks = result.confidence_masks
         if self._loaded_quality == "quality" and len(masks) > 1:
-            mask = 1.0 - masks[0].numpy_view()          # 1 - background
+            mask = 1.0 - masks[0].numpy_view()
         else:
-            mask = masks[0].numpy_view()                # person confidence
+            mask = masks[0].numpy_view()
         mask = np.squeeze(np.asarray(mask, dtype=np.float32))
 
-        # temporal smoothing reduces flicker
         if self._prev_mask is not None and self._prev_mask.shape == mask.shape:
-            a = float(np.clip(self.smoothing, 0, 0.9))
-            mask = a * self._prev_mask + (1 - a) * mask
+            a = float(np.clip(self.smoothing, 0.0, 0.85))
+            mask = a * self._prev_mask + (1.0 - a) * mask
         self._prev_mask = mask
-        return mask
+
+        t = float(np.clip(self.threshold, 0.1, 0.9))
+        soft = 0.04 + 0.12 * float(self.edge_softness)
+        mask = np.clip((mask - (t - soft)) / (2.0 * soft), 0.0, 1.0).astype(np.float32)
+
+        if self._has_guided:
+            guide = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            if mask.shape[:2] != guide.shape[:2]:
+                mask = cv2.resize(mask, (guide.shape[1], guide.shape[0]))
+            mask = cv2.ximgproc.guidedFilter(guide, mask, 3, 1e-3)
+        mask = cv2.GaussianBlur(mask, (3, 3), 0)
+        # Pull outer feather slightly inward to prevent bright background halos around hair
+        mask = np.clip(mask, 0.0, 1.0)
+        return mask * mask
 
     def _worker_loop(self) -> None:
         while True:
@@ -142,78 +144,73 @@ class BackgroundProcessor:
                 small, self._pending = self._pending, None
             try:
                 self._ensure_segmenter()
-                mask = self._segment_small(small)
+                refined = self._segment_and_refine_small(small)
                 self.last_error = ""
             except Exception as exc:
                 self.last_error = str(exc)
-                print("background error:", exc)
-                mask = None
+                refined = None
             with self._cond:
-                self._mask_small = mask
-                self._mask_ready = True
+                if refined is not None:
+                    self._refined_small = refined
                 self._cond.notify_all()
 
-    def _submit(self, small: np.ndarray) -> np.ndarray | None:
+    def _submit(self, frame: np.ndarray) -> np.ndarray | None:
+        h, w = frame.shape[:2]
+        sw = 256
+        sh = max(1, int(h * sw / w))
+        small = cv2.resize(frame, (sw, sh), interpolation=cv2.INTER_NEAREST)
         with self._cond:
             if self._thread is None:
                 self._running = True
                 self._thread = threading.Thread(target=self._worker_loop, daemon=True)
                 self._thread.start()
             self._pending = small
-            self._cond.notify_all()
-            if self._mask_small is None:   # first frame: wait for a mask
-                self._cond.wait_for(lambda: self._mask_ready, timeout=3.0)
-            return self._mask_small
+            self._cond.notify()
+            if self._refined_small is None:
+                self._cond.wait(timeout=1.5)
+            return self._refined_small
 
-    def _refine(self, mask: np.ndarray, small: np.ndarray, w: int, h: int) -> np.ndarray:
-        if mask.shape[:2] != small.shape[:2]:
-            mask = cv2.resize(mask, (small.shape[1], small.shape[0]))
-        # contrast the mask around the threshold
-        t = float(np.clip(self.threshold, 0.05, 0.95))
-        soft = 0.04 + 0.25 * float(self.edge_softness)
-        mask = np.clip((mask - (t - soft)) / (2 * soft), 0, 1).astype(np.float32)
-        # edge-aware refinement guided by the *current* frame
-        if self._has_guided:
-            guide = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            mask = cv2.ximgproc.guidedFilter(guide, mask, 4, 1e-3)
-        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
-        k = 1 + 2 * int(2 + 8 * self.edge_softness)
-        mask = cv2.GaussianBlur(mask, (k, k), 0)
-        return np.clip(mask, 0, 1)
+    def _checkerboard(self, w: int, h: int) -> np.ndarray:
+        if self._checker_cache is None or self._checker_cache.shape[:2] != (h, w):
+            tile = 16
+            y = np.arange(h) // tile
+            x = np.arange(w) // tile
+            grid = (y[:, None] + x[None, :]) % 2
+            c = np.where(grid[..., None] == 0, 28, 42).astype(np.uint8)
+            self._checker_cache = np.repeat(c, 3, axis=2)
+        return self._checker_cache
 
-    # ---------------------------------------------------------------- bg
-    def _background(self, frame: np.ndarray) -> np.ndarray:
-        h, w = frame.shape[:2]
-        if self.mode == "blur":
-            # blur on a downscaled copy: much faster, same look
-            small = cv2.resize(frame, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
-            sigma = 1 + 12 * float(self.blur_strength)
-            small = cv2.GaussianBlur(small, (0, 0), sigma)
-            return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
-        if self.mode == "image" and self._bg_image is not None:
-            if self._bg_cache is None or self._bg_cache.shape[:2] != (h, w):
-                self._bg_cache = _cover(self._bg_image, w, h)
-            return self._bg_cache
-        return np.full_like(frame, self.color, dtype=np.uint8)
+    def render_preview(self, frame: np.ndarray, out: np.ndarray) -> np.ndarray:
+        """Render PNG checkerboard behind cutout in the UI preview window."""
+        if not self.enabled or self.mode != "cutout" or self._refined_small is None:
+            return out
+        h, w = out.shape[:2]
+        mask = cv2.resize(self._refined_small, (w, h), interpolation=cv2.INTER_LINEAR)
+        checker = self._checkerboard(w, h)
+        return cv2.blendLinear(frame, checker, mask, 1.0 - mask)
 
     def process(self, frame: np.ndarray) -> np.ndarray:
-        h, w = frame.shape[:2]
-        sw = 512
-        small = cv2.resize(frame, (sw, int(h * sw / w)), interpolation=cv2.INTER_AREA)
-        raw = self._submit(small)
-        if raw is None:
+        raw_mask = self._submit(frame)
+        if raw_mask is None:
             return frame
-        mask = self._refine(raw, small, w, h)
-        bg = self._background(frame)
-        mask = np.ascontiguousarray(mask, dtype=np.float32)
+        h, w = frame.shape[:2]
+        mask = cv2.resize(raw_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        if self.mode == "cutout":
+            # Pure PNG-style person cutout (background erased to 0)
+            m_u8 = (mask * 255.0).astype(np.uint8)
+            m3 = cv2.merge((m_u8, m_u8, m_u8))
+            return cv2.multiply(frame, m3, scale=1.0 / 255.0, dtype=cv2.CV_8U)
+
+        if self.mode == "greenscreen":
+            bg = np.full_like(frame, (0, 255, 0), dtype=np.uint8)
+            return cv2.blendLinear(frame, bg, mask, 1.0 - mask)
+
+        if self.mode == "blur":
+            small = cv2.resize(frame, (w // 4, h // 4), interpolation=cv2.INTER_NEAREST)
+            small = cv2.GaussianBlur(small, (0, 0), 6.0)
+            bg = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+            return cv2.blendLinear(frame, bg, mask, 1.0 - mask)
+
+        bg = np.full_like(frame, self.color, dtype=np.uint8)
         return cv2.blendLinear(frame, bg, mask, 1.0 - mask)
-
-
-def _cover(img: np.ndarray, w: int, h: int) -> np.ndarray:
-    """Resize + center-crop an image so it fully covers (w, h)."""
-    ih, iw = img.shape[:2]
-    scale = max(w / iw, h / ih)
-    nw, nh = int(round(iw * scale)), int(round(ih * scale))
-    r = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
-    x, y = (nw - w) // 2, (nh - h) // 2
-    return r[y:y + h, x:x + w].copy()

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.vscode/
+.idea/
+# downloaded AI models
+models/*.tflite
+# user settings
+alapcamera_settings.json

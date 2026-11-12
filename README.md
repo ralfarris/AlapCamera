@@ -10,6 +10,22 @@ kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Di
 |---|---|
 | Pilih kamera sumber + resolusi, mirror | ✅ |
 | Output ke virtual camera (OBS Virtual Camera / Unity Capture) | ✅ |
+| **Auto visual enhance** – auto exposure berbasis wajah (AI), low-light boost, auto white balance, denoise, sharpen | ✅ |
+
+### Auto visual enhance
+
+Tidak perlu dataset / training. Menggunakan model AI pre-trained
+(MediaPipe BlazeFace) + algoritma computer vision klasik, real-time di CPU:
+
+- **Face-priority auto exposure** – wajah dideteksi, kecerahan diukur di area
+  wajah, lalu kurva gamma adaptif menaikkan/menurunkan exposure (dihaluskan antar
+  frame agar tidak berkedip). Kamera gelap → wajah tetap terang.
+- **Low-light boost** – CLAHE pada kanal luminance (kontras lokal).
+- **Auto white balance** – koreksi warna gray-world.
+- **Denoise** – bilateral filter, kekuatannya otomatis naik saat kondisi gelap.
+- **Sharpen** – unsharp mask.
+
+Model AI diunduh otomatis sekali saat pertama jalan ke folder `models/`.
 
 ## Persyaratan
 
@@ -36,6 +52,8 @@ alapcamera/
   camera.py      # deteksi & capture kamera fisik (thread terpisah)
   virtualcam.py  # output ke virtual camera (pyvirtualcam)
   pipeline.py    # rantai pemrosesan frame (filter/efek)
+  enhance.py     # auto visual enhance (exposure, low-light, WB, denoise)
+  models.py      # unduh & cache model AI pre-trained
   app.py         # UI desktop (Tkinter)
 main.py          # entry point
 ```

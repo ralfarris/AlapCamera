@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 
 from . import __version__
 from .camera import CameraInfo, CameraStream, list_cameras
+from .enhance import AutoEnhancer
 from .pipeline import MirrorProcessor, Pipeline
 from .virtualcam import VirtualCamera
 
@@ -44,7 +45,8 @@ class AlapCameraApp:
 
     # ------------------------------------------------------------------ setup
     def _build_pipeline(self) -> None:
-        """Hook for registering additional processors (enhance, background...)."""
+        """Register processors (order matters)."""
+        self.enhancer = self.pipeline.add(AutoEnhancer(enabled=True))
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=8)
@@ -90,7 +92,41 @@ class AlapCameraApp:
                   foreground="gray").pack(anchor="w", pady=(4, 0))
 
     def _build_feature_panels(self, parent: ttk.Frame) -> None:
-        """Hook for feature-specific control panels."""
+        """Feature-specific control panels."""
+        self._build_enhance_panel(parent)
+
+    # helpers to create bound widgets
+    def _check(self, parent, text, obj, attr) -> None:
+        var = tk.BooleanVar(value=getattr(obj, attr))
+        ttk.Checkbutton(parent, text=text, variable=var,
+                        command=lambda: setattr(obj, attr, var.get())).pack(anchor="w")
+
+    def _slider(self, parent, text, obj, attr, lo=0.0, hi=1.0) -> None:
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text=text, width=12).pack(side="left")
+        var = tk.DoubleVar(value=getattr(obj, attr))
+        ttk.Scale(row, from_=lo, to=hi, variable=var,
+                  command=lambda v: setattr(obj, attr, float(v))).pack(side="left", fill="x", expand=True)
+
+    def _build_enhance_panel(self, parent: ttk.Frame) -> None:
+        box = ttk.LabelFrame(parent, text="Auto visual enhance", padding=8)
+        box.pack(fill="x", pady=(8, 0))
+        e = self.enhancer
+        self._check(box, "Enable auto enhance", e, "enabled")
+        self._slider(box, "Strength", e, "strength")
+        self._slider(box, "Brightness", e, "target_brightness", 0.25, 0.75)
+        self._slider(box, "Sharpen", e, "sharpen")
+        grid = ttk.Frame(box)
+        grid.pack(fill="x")
+        left, right = ttk.Frame(grid), ttk.Frame(grid)
+        left.pack(side="left", fill="x", expand=True)
+        right.pack(side="left", fill="x", expand=True)
+        self._check(left, "Auto exposure", e, "auto_exposure")
+        self._check(left, "Face priority", e, "face_priority")
+        self._check(left, "White balance", e, "white_balance")
+        self._check(right, "Low-light boost", e, "local_contrast")
+        self._check(right, "Denoise", e, "denoise")
 
     # --------------------------------------------------------------- cameras
     def refresh_cameras(self) -> None:

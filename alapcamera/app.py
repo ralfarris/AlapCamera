@@ -1,10 +1,12 @@
 """Tkinter desktop UI for AlapCamera."""
 from __future__ import annotations
 
+import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import cv2
@@ -95,8 +97,20 @@ class AlapCameraApp:
         out.pack(fill="x", side="bottom", pady=(8, 0))
         self.vcam_btn = ttk.Button(out, text="Start virtual camera", command=self.toggle_vcam)
         self.vcam_btn.pack(fill="x")
-        ttk.Label(out, text="Select it in OBS / Streamlabs / Zoom as a\nvideo capture device.",
+        ttk.Label(out, text="In Streamlabs / OBS / Zoom choose the\n'AlapCamera' video device.",
                   foreground="gray").pack(anchor="w", pady=(4, 0))
+        ttk.Button(out, text="Install 'AlapCamera' device...",
+                   command=self.install_vcam_driver).pack(fill="x", pady=(4, 0))
+
+    def install_vcam_driver(self) -> None:
+        script = Path(__file__).resolve().parent.parent / "scripts" / "install_virtualcam.ps1"
+        if not script.exists():
+            messagebox.showerror("Virtual camera", f"Installer not found:\n{script}")
+            return
+        subprocess.Popen(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)])
+        messagebox.showinfo("Virtual camera",
+                            "Accept the admin prompt to install 'AlapCamera'.\n"
+                            "Then click 'Start virtual camera' and restart Streamlabs/OBS.")
 
     def _build_feature_panels(self, parent: ttk.Frame) -> None:
         """Feature-specific control panels."""
@@ -318,11 +332,11 @@ class AlapCameraApp:
         try:
             vcam.start()
         except Exception as exc:
-            messagebox.showerror(
-                "Virtual camera",
-                f"Could not start virtual camera:\n{exc}\n\n"
-                "On Windows install OBS Studio (it ships the 'OBS Virtual Camera' "
-                "driver) or Unity Capture, then try again.")
+            if messagebox.askyesno(
+                    "Virtual camera",
+                    f"Could not start virtual camera:\n{exc}\n\n"
+                    "Install the 'AlapCamera' virtual webcam now? (needs admin)"):
+                self.install_vcam_driver()
             return
         self.vcam = vcam
         self.vcam_btn.configure(text="Stop virtual camera")

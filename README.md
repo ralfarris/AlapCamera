@@ -9,7 +9,7 @@ kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Di
 | Fitur | Status |
 |---|---|
 | Pilih kamera sumber + resolusi, mirror | ✅ |
-| Output ke virtual camera (OBS Virtual Camera / Unity Capture) | ✅ |
+| Output ke virtual camera bernama **AlapCamera** (fallback: OBS Virtual Camera) | ✅ |
 | **Auto visual enhance** – auto exposure berbasis wajah (AI), low-light boost, auto white balance, denoise, sharpen | ✅ |
 | **AI background** – blur, hapus (warna solid / green screen), ganti gambar | ✅ |
 
@@ -50,9 +50,17 @@ dan di-*feather* agar tepi natural.
 
 ## Persyaratan
 
-- Python 3.10+
-- Driver virtual camera. Cara termudah: install **OBS Studio** (sudah termasuk
-  driver *OBS Virtual Camera*). Alternatif: [Unity Capture](https://github.com/schellingb/UnityCapture).
+- Windows 10/11, Python 3.10+
+- Driver virtual camera — pilih salah satu:
+  - **Direkomendasikan:** jalankan installer bawaan, akan muncul webcam bernama
+    **"AlapCamera"** (seperti "Camo") di Streamlabs/OBS/Zoom:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\install_virtualcam.ps1
+    ```
+    (bisa juga lewat tombol *Install 'AlapCamera' device...* di aplikasi; butuh izin admin.
+    Hapus dengan parameter `-Uninstall`.) Memakai filter open-source
+    [Unity Capture](https://github.com/schellingb/UnityCapture) (MIT).
+  - Atau install **OBS Studio** (driver *OBS Virtual Camera*).
 
 ## Instalasi & menjalankan
 
@@ -61,10 +69,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-1. Pilih kamera sumber di panel kanan.
-2. Klik **Start virtual camera**.
-3. Di Streamlabs/OBS tambahkan source *Video Capture Device* dan pilih
-   **OBS Virtual Camera** (atau *Unity Video Capture*).
+1. Pilih kamera sumber di panel kanan (nama asli perangkat tampil, mis. webcam USB, Camo, Iriun).
+2. Atur *Auto visual enhance* dan *AI background* sesuai selera.
+3. Klik **Start virtual camera**.
+4. Di Streamlabs/OBS tambahkan source *Video Capture Device* dan pilih
+   **AlapCamera** (atau *OBS Virtual Camera*).
 
 ## Struktur proyek
 
@@ -77,5 +86,7 @@ alapcamera/
   background.py  # AI background blur / remove / replace
   models.py      # unduh & cache model AI pre-trained
   app.py         # UI desktop (Tkinter)
+scripts/
+  install_virtualcam.ps1  # pasang webcam virtual "AlapCamera"
 main.py          # entry point
 ```

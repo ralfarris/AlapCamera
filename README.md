@@ -1,6 +1,6 @@
 # AlapCamera
 
-Aplikasi **virtual camera** untuk Windows (mirip Camo Camera): pilih kamera fisik
+Aplikasi **virtual camera** untuk Windows: pilih kamera fisik
 mana saja yang ada di perangkat, olah gambarnya, lalu kirim hasilnya ke sebuah
 kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Discord**.
 
@@ -55,7 +55,7 @@ dan di-*feather* agar tepi natural.
 - Windows 10/11, Python 3.10+
 - Driver virtual camera — pilih salah satu:
   - **Direkomendasikan:** jalankan installer bawaan, akan muncul webcam bernama
-    **"AlapCamera"** (seperti "Camo") di Streamlabs/OBS/Zoom:
+    **"AlapCamera"** di Streamlabs/OBS/Zoom:
     ```powershell
     powershell -ExecutionPolicy Bypass -File scripts\install_virtualcam.ps1
     ```
@@ -73,7 +73,7 @@ python main.py
 
 Atau di Windows cukup klik dua kali **`run.bat`**.
 
-1. Pilih kamera sumber di panel kanan (nama asli perangkat tampil, mis. webcam USB, Camo, Iriun).
+1. Pilih kamera sumber di panel kanan (nama asli perangkat tampil, mis. webcam USB atau kamera eksternal).
 2. Atur *Auto visual enhance* dan *AI background* sesuai selera.
 3. Klik **Start virtual camera**.
 4. Di Streamlabs/OBS tambahkan source *Video Capture Device* dan pilih

@@ -3,7 +3,7 @@
 # Uses the open-source Unity Capture DirectShow filter
 # (https://github.com/schellingb/UnityCapture, MIT license), registered under
 # the name "AlapCamera". After this, "AlapCamera" shows up as a webcam in
-# Streamlabs, OBS, Zoom, Google Meet, Discord, ... just like Camo.
+# Streamlabs, OBS, Zoom, Google Meet, Discord, etc.
 #
 # Run:  powershell -ExecutionPolicy Bypass -File scripts\install_virtualcam.ps1
 param(

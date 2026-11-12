@@ -19,7 +19,7 @@ from .background import BackgroundProcessor
 from .camera import CameraInfo, CameraStream, default_camera, list_cameras
 from .enhance import AutoEnhancer
 from .pipeline import MirrorProcessor, Pipeline
-from .virtualcam import VirtualCamera
+from .virtualcam import VirtualCamera, install_hklm_driver, is_hklm_registered
 
 PREVIEW_W, PREVIEW_H = 640, 360
 SETTINGS_FILE = Path(__file__).resolve().parent.parent / "alapcamera_settings.json"
@@ -295,14 +295,19 @@ class AlapCameraApp:
         self._refresh_mode_buttons()
 
     def install_vcam_driver(self) -> None:
-        script = Path(__file__).resolve().parent.parent / "scripts" / "install_virtualcam.ps1"
-        if not script.exists():
-            messagebox.showerror("Virtual camera", f"Installer not found:\n{script}")
-            return
-        subprocess.Popen(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)])
-        messagebox.showinfo("Virtual camera",
-                            "Klik Yes pada jendela Admin untuk memasang driver 'AlapCamera'.\n"
-                            "Setelah selesai, kamera virtual akan langsung aktif otomatis.")
+        if install_hklm_driver():
+            self.stop_vcam()
+            self._auto_start_vcam()
+            messagebox.showinfo(
+                "AlapCamera",
+                "Driver 'AlapCamera' sudah terdaftar di sistem (HKLM)!\n"
+                "Tutup lalu buka kembali jendela Video Capture Device di Streamlabs, lalu pilih 'AlapCamera'.",
+            )
+        else:
+            messagebox.showwarning(
+                "AlapCamera",
+                "Pastikan klik 'Yes' pada jendela Administrator (UAC) agar Streamlabs dapat mendeteksi 'AlapCamera'.",
+            )
 
     # --------------------------------------------------------------- cameras
     def refresh_cameras(self) -> None:
@@ -460,13 +465,22 @@ class AlapCameraApp:
         try:
             vcam.start()
             self.vcam = vcam
-            self.live_badge.configure(text=f"● LIVE · {vcam.device_name}", bg="#064e3b", fg="#34d399")
-            self.vcam_info.configure(
-                text=f"Aktif mengirim video ke '{vcam.device_name}' ({w}×{h}).\n"
-                     f"Langsung pilih '{vcam.device_name}' di Streamlabs / OBS.",
-                fg="#34d399",
-            )
-            self.drv_btn.pack_forget()
+            if is_hklm_registered():
+                self.live_badge.configure(text=f"● LIVE · {vcam.device_name}", bg="#064e3b", fg="#34d399")
+                self.vcam_info.configure(
+                    text=f"Aktif mengirim video ke '{vcam.device_name}' ({w}×{h}).\n"
+                         f"Langsung pilih '{vcam.device_name}' di Streamlabs / OBS.",
+                    fg="#34d399",
+                )
+                self.drv_btn.pack_forget()
+            else:
+                self.live_badge.configure(text="● KLIK INSTALL DRIVER (ADMIN)", bg="#78350f", fg="#fcd34d")
+                self.vcam_info.configure(
+                    text="Streamlabs berjalan sebagai Administrator (HKLM).\n"
+                         "Klik tombol di bawah lalu pilih 'Yes' sekali saja agar muncul di Streamlabs.",
+                    fg="#fcd34d",
+                )
+                self.drv_btn.pack(fill="x", pady=(8, 0))
         except Exception:
             self.vcam = None
             self.live_badge.configure(text="● DRIVER BELUM TERPASANG", bg="#3f1d24", fg="#f87171")

@@ -1,13 +1,15 @@
 """Virtual camera output (shows up as 'AlapCamera' in Streamlabs / OBS / Zoom).
 
-Automatically downloads and registers the Unity Capture DirectShow filter under
-the name 'AlapCamera' in HKCU (Current User registry) on first run — no Admin
-or UAC prompt required!
+Checks if 'AlapCamera' is registered in HKLM (required for elevated apps like
+Streamlabs Desktop that run as Administrator). If not yet in HKLM, runs the
+one-time elevated installer (scripts/install_virtualcam.ps1) and also provides
+an HKCU fallback.
 """
 from __future__ import annotations
 
 import ctypes
 import os
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
@@ -23,35 +25,105 @@ except ImportError:  # pragma: no cover
 DEVICE_NAME = "AlapCamera"
 _UNITY_CLSID = "{5C2CD55C-92AD-4999-8666-912BD3E70010}"
 _VIDEO_CAT = "{860BB310-5D01-11D0-BD3B-00A0C911CE86}"
-_DLL_URL = "https://github.com/schellingb/UnityCapture/raw/master/Install/UnityCaptureFilter64.dll"
+_DLLS = (
+    ("UnityCaptureFilter64.dll", "https://github.com/schellingb/UnityCapture/raw/master/Install/UnityCaptureFilter64.dll"),
+    ("UnityCaptureFilter32.dll", "https://github.com/schellingb/UnityCapture/raw/master/Install/UnityCaptureFilter32.dll"),
+)
 
 
-def ensure_virtualcam_registered(device_name: str = DEVICE_NAME) -> bool:
-    """Register the 'AlapCamera' DirectShow virtual webcam in HKCU (no Admin needed)."""
+def is_hklm_registered(device_name: str = DEVICE_NAME) -> bool:
+    """Return True if 'AlapCamera' is registered system-wide in HKLM (needed by Admin apps like Streamlabs)."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import winreg
+        inst_key_path = rf"Software\Classes\CLSID\{_VIDEO_CAT}\Instance\{_UNITY_CLSID}"
+        clsid_key_path = rf"Software\Classes\CLSID\{_UNITY_CLSID}\InprocServer32"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, inst_key_path) as k:
+            fn, _ = winreg.QueryValueEx(k, "FriendlyName")
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, clsid_key_path) as k:
+            dll_p, _ = winreg.QueryValueEx(k, "")
+        return fn == device_name and Path(dll_p).exists()
+    except OSError:
+        return False
+
+
+def _ensure_dlls_cached() -> Path:
+    base_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "AlapCamera" / "driver"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    for fname, url in _DLLS:
+        p = base_dir / fname
+        if not p.exists() or p.stat().st_size < 100_000:
+            urllib.request.urlretrieve(url, p)
+    return base_dir / "UnityCaptureFilter64.dll"
+
+
+def install_hklm_driver() -> bool:
+    """Run scripts/install_virtualcam.ps1 with UAC elevation to register 'AlapCamera' in HKLM."""
     if sys.platform != "win32":
         return False
     try:
+        _ensure_dlls_cached()
+        script = Path(__file__).resolve().parent.parent / "scripts" / "install_virtualcam.ps1"
+        if not script.exists():
+            return False
+
+        class SHELLEXECUTEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong),
+                ("fMask", ctypes.c_ulong),
+                ("hwnd", ctypes.c_void_p),
+                ("lpVerb", ctypes.c_wchar_p),
+                ("lpFile", ctypes.c_wchar_p),
+                ("lpParameters", ctypes.c_wchar_p),
+                ("lpDirectory", ctypes.c_wchar_p),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", ctypes.c_void_p),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", ctypes.c_wchar_p),
+                ("hkeyClass", ctypes.c_void_p),
+                ("dwHotKey", ctypes.c_ulong),
+                ("hIcon", ctypes.c_void_p),
+                ("hProcess", ctypes.c_void_p),
+            ]
+
+        sei = SHELLEXECUTEINFOW()
+        sei.cbSize = ctypes.sizeof(sei)
+        sei.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        sei.lpVerb = "runas"
+        sei.lpFile = "powershell.exe"
+        sei.lpParameters = f'-NoProfile -ExecutionPolicy Bypass -File "{script}" -Name "{DEVICE_NAME}"'
+        sei.nShow = 0  # SW_HIDE
+
+        if ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)) and sei.hProcess:
+            ctypes.windll.kernel32.WaitForSingleObject(sei.hProcess, 30000)
+            ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+
+        return is_hklm_registered(DEVICE_NAME)
+    except Exception as exc:
+        print("HKLM driver install warning:", exc)
+        return False
+
+
+def ensure_virtualcam_registered(device_name: str = DEVICE_NAME) -> bool:
+    """Ensure 'AlapCamera' DirectShow filter is registered (prefers HKLM for Streamlabs Admin)."""
+    if sys.platform != "win32":
+        return False
+    if is_hklm_registered(device_name):
+        return True
+
+    # Try one-time HKLM registration (needed because Streamlabs Desktop runs as Administrator
+    # and Windows COM blocks Administrator processes from loading HKCU CLSIDs)
+    if install_hklm_driver():
+        return True
+
+    # Fallback: HKCU registration for non-elevated apps
+    try:
         import winreg
 
+        dll_path = _ensure_dlls_cached()
         inst_key_path = rf"Software\Classes\CLSID\{_VIDEO_CAT}\Instance\{_UNITY_CLSID}"
         clsid_key_path = rf"Software\Classes\CLSID\{_UNITY_CLSID}"
-
-        # Fast check if already registered with our name and DLL exists
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, inst_key_path) as k:
-                fn, _ = winreg.QueryValueEx(k, "FriendlyName")
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"{clsid_key_path}\InprocServer32") as k:
-                dll_p, _ = winreg.QueryValueEx(k, "")
-            if fn == device_name and Path(dll_p).exists():
-                return True
-        except OSError:
-            pass
-
-        base_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "AlapCamera" / "driver"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        dll_path = base_dir / "UnityCaptureFilter64.dll"
-        if not dll_path.exists() or dll_path.stat().st_size < 100_000:
-            urllib.request.urlretrieve(_DLL_URL, dll_path)
 
         advapi32 = ctypes.windll.advapi32
         advapi32.RegOverridePredefKey.argtypes = [ctypes.c_void_p, ctypes.c_void_p]

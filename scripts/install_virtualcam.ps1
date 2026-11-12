@@ -1,11 +1,6 @@
-# Installs the "AlapCamera" virtual webcam device (Windows).
-#
-# Uses the open-source Unity Capture DirectShow filter
-# (https://github.com/schellingb/UnityCapture, MIT license), registered under
-# the name "AlapCamera". After this, "AlapCamera" shows up as a webcam in
-# Streamlabs, OBS, Zoom, Google Meet, Discord, etc.
-#
-# Run:  powershell -ExecutionPolicy Bypass -File scripts\install_virtualcam.ps1
+# Installs the "AlapCamera" virtual webcam device into HKLM (Windows).
+# Required so elevated apps like Streamlabs Desktop (Running as administrator)
+# can load the DirectShow COM filter.
 param(
     [string]$Name = "AlapCamera",
     [switch]$Uninstall
@@ -13,19 +8,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# --- self-elevate (registering a camera device needs admin rights) ---------
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    $argList = @("-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Name", "`"$Name`"")
+    $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Name", "`"$Name`"")
     if ($Uninstall) { $argList += "-Uninstall" }
     Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait
     exit
 }
 
 $dir = Join-Path $env:ProgramData "AlapCamera\driver"
+$localCache = Join-Path $env:LOCALAPPDATA "AlapCamera\driver"
 $base = "https://github.com/schellingb/UnityCapture/raw/master/Install"
 $dlls = @("UnityCaptureFilter64.dll", "UnityCaptureFilter32.dll")
+
+$clsid = "{5C2CD55C-92AD-4999-8666-912BD3E70010}"
+$cat = "{860BB310-5D01-11D0-BD3B-00A0C911CE86}"
 
 if ($Uninstall) {
     foreach ($dll in $dlls) {
@@ -35,24 +33,47 @@ if ($Uninstall) {
             else { & "$env:WINDIR\System32\regsvr32.exe" /s /u $path }
         }
     }
-    Write-Host "AlapCamera virtual camera removed." -ForegroundColor Green
-    Start-Sleep 2
     exit
 }
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 foreach ($dll in $dlls) {
     $path = Join-Path $dir $dll
+    $cached = Join-Path $localCache $dll
     if (-not (Test-Path $path)) {
-        Write-Host "Downloading $dll ..."
-        Invoke-WebRequest -UseBasicParsing -Uri "$base/$dll" -OutFile $path
+        if (Test-Path $cached) {
+            Copy-Item -Force $cached $path
+        } else {
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/$dll" -OutFile $path
+        }
     }
 }
 
-# 64-bit apps (OBS, Streamlabs, Zoom...) and 32-bit apps
-& "$env:WINDIR\System32\regsvr32.exe" /s "/i:UnityCaptureName=$Name" (Join-Path $dir "UnityCaptureFilter64.dll")
-& "$env:WINDIR\SysWOW64\regsvr32.exe" /s "/i:UnityCaptureName=$Name" (Join-Path $dir "UnityCaptureFilter32.dll")
+# Register in HKLM for both 64-bit (Streamlabs/OBS) and 32-bit apps
+& "$env:WINDIR\System32\regsvr32.exe" /s (Join-Path $dir "UnityCaptureFilter64.dll")
+& "$env:WINDIR\SysWOW64\regsvr32.exe" /s (Join-Path $dir "UnityCaptureFilter32.dll")
 
-Write-Host "Virtual camera '$Name' installed." -ForegroundColor Green
-Write-Host "Restart Streamlabs/OBS/Zoom, then pick '$Name' as the video device."
-Start-Sleep 3
+# Explicitly brand FriendlyName as "AlapCamera" in HKLM (64-bit & 32-bit)
+$regPaths = @(
+    "HKLM:\SOFTWARE\Classes\CLSID\$cat\Instance\$clsid",
+    "HKLM:\SOFTWARE\Classes\CLSID\$clsid",
+    "HKLM:\SOFTWARE\WOW6432Node\Classes\CLSID\$cat\Instance\$clsid",
+    "HKLM:\SOFTWARE\WOW6432Node\Classes\CLSID\$clsid"
+)
+foreach ($rp in $regPaths) {
+    if (Test-Path $rp) {
+        Set-ItemProperty -Path $rp -Name "FriendlyName" -Value $Name -Force
+        Set-ItemProperty -Path $rp -Name "(Default)" -Value $Name -Force
+    }
+}
+
+# Remove any HKCU shadow keys so HKLM is used cleanly everywhere
+$cuPaths = @(
+    "HKCU:\Software\Classes\CLSID\$cat\Instance\$clsid",
+    "HKCU:\Software\Classes\CLSID\$clsid"
+)
+foreach ($cp in $cuPaths) {
+    if (Test-Path $cp) {
+        Remove-Item -Path $cp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

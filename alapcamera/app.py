@@ -4,12 +4,13 @@ from __future__ import annotations
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import cv2
 from PIL import Image, ImageTk
 
 from . import __version__
+from .background import BackgroundProcessor
 from .camera import CameraInfo, CameraStream, list_cameras
 from .enhance import AutoEnhancer
 from .pipeline import MirrorProcessor, Pipeline
@@ -47,6 +48,7 @@ class AlapCameraApp:
     def _build_pipeline(self) -> None:
         """Register processors (order matters)."""
         self.enhancer = self.pipeline.add(AutoEnhancer(enabled=True))
+        self.background = self.pipeline.add(BackgroundProcessor(enabled=False))
 
     def _build_ui(self) -> None:
         main = ttk.Frame(self.root, padding=8)
@@ -94,12 +96,76 @@ class AlapCameraApp:
     def _build_feature_panels(self, parent: ttk.Frame) -> None:
         """Feature-specific control panels."""
         self._build_enhance_panel(parent)
+        self._build_background_panel(parent)
+
+    def _build_background_panel(self, parent: ttk.Frame) -> None:
+        box = ttk.LabelFrame(parent, text="AI background", padding=8)
+        box.pack(fill="x", pady=(8, 0))
+        b = self.background
+        self.bg_enabled_var = self._check(box, "Enable background effect", b, "enabled")
+
+        modes = ttk.Frame(box)
+        modes.pack(fill="x", pady=(2, 2))
+        self.bg_mode = tk.StringVar(value=b.mode)
+        for text, val in (("Blur", "blur"), ("Remove", "remove"), ("Image", "image")):
+            ttk.Radiobutton(modes, text=text, value=val, variable=self.bg_mode,
+                            command=self._on_bg_mode).pack(side="left", padx=(0, 8))
+
+        row = ttk.Frame(box)
+        row.pack(fill="x", pady=1)
+        ttk.Label(row, text="AI model", width=12).pack(side="left")
+        q = tk.StringVar(value=b.quality)
+        cb = ttk.Combobox(row, textvariable=q, values=["fast", "quality"], state="readonly", width=10)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda e: setattr(b, "quality", q.get()))
+
+        self._slider(box, "Blur amount", b, "blur_strength")
+        self._slider(box, "Edge softness", b, "edge_softness")
+        self._slider(box, "Cut-off", b, "threshold", 0.2, 0.8)
+
+        row = ttk.Frame(box)
+        row.pack(fill="x", pady=(4, 0))
+        ttk.Button(row, text="Remove color...", command=self._pick_bg_color).pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Image...", command=self._pick_bg_image).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+    def _on_bg_mode(self) -> None:
+        mode = self.bg_mode.get()
+        if mode == "image" and self.background._bg_image is None:
+            if not self._pick_bg_image():
+                self.bg_mode.set(self.background.mode)
+                return
+        self.background.mode = mode
+        self.background.enabled = True
+        self.bg_enabled_var.set(True)
+
+    def _pick_bg_color(self) -> None:
+        b, g, r = self.background.color
+        res = colorchooser.askcolor(color=f"#{r:02x}{g:02x}{b:02x}", title="Background color")
+        if res and res[0]:
+            r, g, b = (int(c) for c in res[0])
+            self.background.color = (b, g, r)
+            self.background.mode = "remove"
+            self.bg_mode.set("remove")
+
+    def _pick_bg_image(self) -> bool:
+        path = filedialog.askopenfilename(
+            title="Background image",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp"), ("All files", "*.*")])
+        if not path:
+            return False
+        if not self.background.set_background_image(path):
+            messagebox.showerror("Background", "Could not read that image.")
+            return False
+        self.background.mode = "image"
+        self.bg_mode.set("image")
+        return True
 
     # helpers to create bound widgets
-    def _check(self, parent, text, obj, attr) -> None:
+    def _check(self, parent, text, obj, attr) -> tk.BooleanVar:
         var = tk.BooleanVar(value=getattr(obj, attr))
         ttk.Checkbutton(parent, text=text, variable=var,
                         command=lambda: setattr(obj, attr, var.get())).pack(anchor="w")
+        return var
 
     def _slider(self, parent, text, obj, attr, lo=0.0, hi=1.0) -> None:
         row = ttk.Frame(parent)

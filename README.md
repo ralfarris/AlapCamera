@@ -11,6 +11,7 @@ kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Di
 | Pilih kamera sumber + resolusi, mirror | ✅ |
 | Output ke virtual camera (OBS Virtual Camera / Unity Capture) | ✅ |
 | **Auto visual enhance** – auto exposure berbasis wajah (AI), low-light boost, auto white balance, denoise, sharpen | ✅ |
+| **AI background** – blur, hapus (warna solid / green screen), ganti gambar | ✅ |
 
 ### Auto visual enhance
 
@@ -26,6 +27,26 @@ Tidak perlu dataset / training. Menggunakan model AI pre-trained
 - **Sharpen** – unsharp mask.
 
 Model AI diunduh otomatis sekali saat pertama jalan ke folder `models/`.
+
+### AI background (blur / remove / ganti gambar)
+
+Juga **tanpa dataset** – memakai model segmentasi orang pre-trained dari Google
+MediaPipe:
+
+| Model | Kecepatan | Keterangan |
+|---|---|---|
+| `fast` – selfie_segmenter | sangat cepat | cocok untuk laptop biasa |
+| `quality` – selfie_multiclass_256x256 | lebih berat | tepi rambut lebih rapi |
+
+Mode:
+- **Blur** – background diburamkan (efek bokeh).
+- **Remove** – background diganti warna solid (default hijau → mudah di-*chroma key*
+  di OBS/Streamlabs untuk efek transparan).
+- **Image** – background diganti gambar pilihan.
+
+Segmentasi berjalan di thread terpisah sehingga FPS output tetap lancar. Mask
+dihaluskan antar-frame, diperhalus dengan *guided filter* mengikuti tepi gambar,
+dan di-*feather* agar tepi natural.
 
 ## Persyaratan
 
@@ -53,6 +74,7 @@ alapcamera/
   virtualcam.py  # output ke virtual camera (pyvirtualcam)
   pipeline.py    # rantai pemrosesan frame (filter/efek)
   enhance.py     # auto visual enhance (exposure, low-light, WB, denoise)
+  background.py  # AI background blur / remove / replace
   models.py      # unduh & cache model AI pre-trained
   app.py         # UI desktop (Tkinter)
 main.py          # entry point

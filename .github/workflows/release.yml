@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release archive
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist/AlapCamera
+          cp -r main.py run.bat requirements.txt README.md alapcamera scripts dist/AlapCamera/
+          cd dist
+          zip -r "AlapCamera-${TAG}-windows.zip" AlapCamera
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ZIP="dist/AlapCamera-${TAG}-windows.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" --title "AlapCamera $TAG" --generate-notes
+          fi

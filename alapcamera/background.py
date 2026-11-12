@@ -42,6 +42,7 @@ class BackgroundProcessor:
         self._prev_mask: np.ndarray | None = None
         self._bg_image: np.ndarray | None = None
         self._bg_cache: np.ndarray | None = None
+        self.image_path: str = ""
         self._t0 = time.monotonic()
         self._last_ts = -1
         self._has_guided = hasattr(cv2, "ximgproc")
@@ -78,12 +79,17 @@ class BackgroundProcessor:
         if not path:
             self._bg_image = None
             self._bg_cache = None
+            self.image_path = ""
             return True
-        img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        try:
+            img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+        except Exception:
+            return False
         if img is None:
             return False
         self._bg_image = img
         self._bg_cache = None
+        self.image_path = str(path)
         return True
 
     def _close_segmenter(self) -> None:

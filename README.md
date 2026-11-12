@@ -12,6 +12,8 @@ kamera virtual yang bisa dipilih di **OBS / Streamlabs / Zoom / Google Meet / Di
 | Output ke virtual camera bernama **AlapCamera** (fallback: OBS Virtual Camera) | ✅ |
 | **Auto visual enhance** – auto exposure berbasis wajah (AI), low-light boost, auto white balance, denoise, sharpen | ✅ |
 | **AI background** – blur, hapus (warna solid / green screen), ganti gambar | ✅ |
+| **Compare (Before/After)** – mode split-screen untuk melihat perbandingan sebelum & sesudah secara langsung | ✅ |
+| **Auto-save settings** – pengaturan kamera, resolusi, enhance, dan background otomatis tersimpan | ✅ |
 
 ### Auto visual enhance
 
@@ -68,6 +70,8 @@ dan di-*feather* agar tepi natural.
 pip install -r requirements.txt
 python main.py
 ```
+
+Atau di Windows cukup klik dua kali **`run.bat`**.
 
 1. Pilih kamera sumber di panel kanan (nama asli perangkat tampil, mis. webcam USB, Camo, Iriun).
 2. Atur *Auto visual enhance* dan *AI background* sesuai selera.

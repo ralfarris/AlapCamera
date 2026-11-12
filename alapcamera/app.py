@@ -1,6 +1,7 @@
 """Tkinter desktop UI for AlapCamera."""
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import threading
@@ -10,6 +11,7 @@ from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import cv2
+import numpy as np
 from PIL import Image, ImageTk
 
 from . import __version__
@@ -21,6 +23,7 @@ from .virtualcam import VirtualCamera
 
 PREVIEW_W, PREVIEW_H = 640, 360
 RESOLUTIONS = {"1280x720": (1280, 720), "1920x1080": (1920, 1080), "640x480": (640, 480)}
+SETTINGS_FILE = Path(__file__).resolve().parent.parent / "alapcamera_settings.json"
 
 
 class AlapCameraApp:
@@ -38,11 +41,15 @@ class AlapCameraApp:
         self._build_pipeline()
 
         self._latest_output = None
+        self._latest_raw = None
         self._out_lock = threading.Lock()
         self._worker_running = False
         self._worker: threading.Thread | None = None
         self._fps = 0.0
+        self._bound_vars: list[tuple[tk.Variable, object, str]] = []
+        self._preferred_camera: str = ""
 
+        self._load_settings()
         self._build_ui()
         self.refresh_cameras()
         self._update_preview()
@@ -80,16 +87,21 @@ class AlapCameraApp:
         row = ttk.Frame(src)
         row.pack(fill="x", pady=(6, 0))
         ttk.Label(row, text="Resolution").pack(side="left")
-        self.res_var = tk.StringVar(value="1280x720")
+        self.res_var = tk.StringVar(value=getattr(self, "_initial_resolution", "1280x720"))
         res = ttk.Combobox(row, textvariable=self.res_var, values=list(RESOLUTIONS),
                            state="readonly", width=12)
         res.pack(side="right")
         res.bind("<<ComboboxSelected>>", lambda e: self.start_camera())
         ttk.Button(src, text="Refresh cameras", command=self.refresh_cameras).pack(fill="x", pady=(6, 0))
-        self.mirror_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(src, text="Mirror", variable=self.mirror_var,
+        chk_row = ttk.Frame(src)
+        chk_row.pack(fill="x", pady=(6, 0))
+        self.mirror_var = tk.BooleanVar(value=self.mirror.enabled)
+        ttk.Checkbutton(chk_row, text="Mirror", variable=self.mirror_var,
                         command=lambda: setattr(self.mirror, "enabled", self.mirror_var.get())
-                        ).pack(anchor="w", pady=(6, 0))
+                        ).pack(side="left")
+        self.split_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(chk_row, text="Compare (Before/After)",
+                        variable=self.split_var).pack(side="right")
 
         self._build_feature_panels(self.side)
 
@@ -165,6 +177,8 @@ class AlapCameraApp:
             self.background.color = (b, g, r)
             self.background.mode = "remove"
             self.bg_mode.set("remove")
+            self.background.enabled = True
+            self.bg_enabled_var.set(True)
 
     def _pick_bg_image(self) -> bool:
         path = filedialog.askopenfilename(
@@ -177,6 +191,8 @@ class AlapCameraApp:
             return False
         self.background.mode = "image"
         self.bg_mode.set("image")
+        self.background.enabled = True
+        self.bg_enabled_var.set(True)
         return True
 
     # helpers to create bound widgets
@@ -184,15 +200,18 @@ class AlapCameraApp:
         var = tk.BooleanVar(value=getattr(obj, attr))
         ttk.Checkbutton(parent, text=text, variable=var,
                         command=lambda: setattr(obj, attr, var.get())).pack(anchor="w")
+        self._bound_vars.append((var, obj, attr))
         return var
 
-    def _slider(self, parent, text, obj, attr, lo=0.0, hi=1.0) -> None:
+    def _slider(self, parent, text, obj, attr, lo=0.0, hi=1.0) -> tk.DoubleVar:
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=1)
         ttk.Label(row, text=text, width=12).pack(side="left")
         var = tk.DoubleVar(value=getattr(obj, attr))
         ttk.Scale(row, from_=lo, to=hi, variable=var,
                   command=lambda v: setattr(obj, attr, float(v))).pack(side="left", fill="x", expand=True)
+        self._bound_vars.append((var, obj, attr))
+        return var
 
     def _build_enhance_panel(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text="Auto visual enhance", padding=8)
@@ -212,6 +231,19 @@ class AlapCameraApp:
         self._check(left, "White balance", e, "white_balance")
         self._check(right, "Low-light boost", e, "local_contrast")
         self._check(right, "Denoise", e, "denoise")
+        ttk.Button(box, text="Reset enhance defaults",
+                   command=self._reset_enhance).pack(fill="x", pady=(4, 0))
+
+    def _reset_enhance(self) -> None:
+        defaults = AutoEnhancer(enabled=True)
+        for attr in ("enabled", "strength", "target_brightness", "sharpen",
+                     "auto_exposure", "face_priority", "white_balance",
+                     "local_contrast", "denoise"):
+            setattr(self.enhancer, attr, getattr(defaults, attr))
+        defaults.close()
+        for var, obj, attr in self._bound_vars:
+            if obj is self.enhancer:
+                var.set(getattr(obj, attr))
 
     # --------------------------------------------------------------- cameras
     def refresh_cameras(self) -> None:
@@ -234,7 +266,13 @@ class AlapCameraApp:
         self.cameras = cams
         self.cam_combo["values"] = [str(c) for c in self.cameras]
         if self.cameras:
-            self.cam_combo.current(default_camera(self.cameras))
+            idx = default_camera(self.cameras)
+            if self._preferred_camera:
+                for i, c in enumerate(self.cameras):
+                    if c.name == self._preferred_camera:
+                        idx = i
+                        break
+            self.cam_combo.current(idx)
             self.status.set(f"Found {len(self.cameras)} camera(s)")
             self.start_camera()
         else:
@@ -289,6 +327,7 @@ class AlapCameraApp:
                 except Exception as exc:
                     print("virtual camera error:", exc)
             with self._out_lock:
+                self._latest_raw = cv2.flip(frame, 1) if self.mirror.enabled else frame
                 self._latest_output = out
             now = time.perf_counter()
             dt = now - last
@@ -302,7 +341,10 @@ class AlapCameraApp:
     def _update_preview(self) -> None:
         with self._out_lock:
             frame = self._latest_output
+            raw = self._latest_raw
         if frame is not None:
+            if self.split_var.get() and raw is not None and raw.shape == frame.shape:
+                frame = _make_split(raw, frame)
             h, w = frame.shape[:2]
             bw = max(160, self.preview_box.winfo_width())
             bh = max(90, self.preview_box.winfo_height())
@@ -348,12 +390,82 @@ class AlapCameraApp:
         if hasattr(self, "vcam_btn"):
             self.vcam_btn.configure(text="Start virtual camera")
 
+    # -------------------------------------------------------------- settings
+    def _load_settings(self) -> None:
+        self._initial_resolution = "1280x720"
+        if not SETTINGS_FILE.exists():
+            return
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        self._preferred_camera = str(data.get("camera", ""))
+        if data.get("resolution") in RESOLUTIONS:
+            self._initial_resolution = data["resolution"]
+        if "mirror" in data:
+            self.mirror.enabled = bool(data["mirror"])
+        enh = data.get("enhance", {})
+        for k in ("enabled", "strength", "target_brightness", "sharpen",
+                  "auto_exposure", "face_priority", "white_balance",
+                  "local_contrast", "denoise"):
+            if k in enh:
+                setattr(self.enhancer, k, enh[k])
+        bg = data.get("background", {})
+        for k in ("enabled", "mode", "quality", "blur_strength",
+                  "edge_softness", "threshold"):
+            if k in bg:
+                setattr(self.background, k, bg[k])
+        if isinstance(bg.get("color"), list) and len(bg["color"]) == 3:
+            self.background.color = tuple(int(x) for x in bg["color"])
+        if bg.get("image_path"):
+            self.background.set_background_image(bg["image_path"])
+
+    def _save_settings(self) -> None:
+        sel = self.cam_combo.current()
+        cam_name = self.cameras[sel].name if 0 <= sel < len(self.cameras) else self._preferred_camera
+        data = {
+            "camera": cam_name,
+            "resolution": self.res_var.get(),
+            "mirror": self.mirror.enabled,
+            "enhance": {k: getattr(self.enhancer, k) for k in (
+                "enabled", "strength", "target_brightness", "sharpen",
+                "auto_exposure", "face_priority", "white_balance",
+                "local_contrast", "denoise")},
+            "background": {
+                "enabled": self.background.enabled,
+                "mode": self.background.mode,
+                "quality": self.background.quality,
+                "blur_strength": self.background.blur_strength,
+                "edge_softness": self.background.edge_softness,
+                "threshold": self.background.threshold,
+                "color": list(self.background.color),
+                "image_path": self.background.image_path,
+            },
+        }
+        try:
+            SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # ----------------------------------------------------------------- close
     def on_close(self) -> None:
+        self._save_settings()
         self.stop_vcam()
         self.stop_camera()
         self.pipeline.close()
         self.root.destroy()
+
+
+def _make_split(before: np.ndarray, after: np.ndarray) -> np.ndarray:
+    """Side-by-side Before (left) / After (right) split on a single frame."""
+    out = after.copy()
+    h, w = out.shape[:2]
+    mid = w // 2
+    out[:, :mid] = before[:, :mid]
+    cv2.line(out, (mid, 0), (mid, h), (255, 255, 255), 2)
+    cv2.putText(out, "BEFORE", (14, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(out, "AFTER", (mid + 14, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 255, 120), 2, cv2.LINE_AA)
+    return out
 
 
 def _enable_dpi_awareness() -> None:

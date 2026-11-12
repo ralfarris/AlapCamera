@@ -113,7 +113,10 @@ class AutoEnhancer:
     def _meter(self, l_chan: np.ndarray) -> float:
         if self.face_priority and self._face_box is not None:
             x, y, w, h = self._face_box
-            roi = l_chan[y:y + h, x:x + w]
+            ih, iw = l_chan.shape
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(iw, x + w), min(ih, y + h)
+            roi = l_chan[y0:y1, x0:x1]
             if roi.size:
                 face = float(roi.mean()) / 255.0
                 scene = float(l_chan.mean()) / 255.0
@@ -172,6 +175,14 @@ class AutoEnhancer:
             self._clahe.setClipLimit(1.2 + 2.0 * s * (0.4 + darkness))
             l_eq = self._clahe.apply(l_chan)
             l_chan = cv2.addWeighted(l_eq, 0.5 + 0.5 * s, l_chan, 0.5 - 0.5 * s, 0)
+
+        # keep colours from looking washed out when lifting a dark scene
+        if darkness * s > 0.05:
+            sat = 1.0 + 0.25 * darkness * s
+            chroma_lut = np.clip((np.arange(256, dtype=np.float32) - 128.0) * sat + 128.0,
+                                 0, 255).astype(np.uint8)
+            a_chan = cv2.LUT(a_chan, chroma_lut)
+            b_chan = cv2.LUT(b_chan, chroma_lut)
 
         out = cv2.cvtColor(cv2.merge((l_chan, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
 

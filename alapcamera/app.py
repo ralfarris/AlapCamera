@@ -349,7 +349,7 @@ class AlapCameraApp:
         cam_info = self.cameras[sel]
         try:
             # Open at camera's native resolution so USB webcams run at full 30 FPS
-            self.stream = CameraStream(cam_info.index).start()
+            self.stream = CameraStream(cam_info.index, name=cam_info.name).start()
         except RuntimeError as exc:
             messagebox.showerror("Camera", str(exc))
             self.stream = None
@@ -376,10 +376,24 @@ class AlapCameraApp:
             frame = self.stream.wait_read(timeout=0.05)
             if frame is None:
                 continue
+            if self.stream.is_busy:
+                if self.vcam is not None:
+                    try:
+                        self.vcam.send(frame)
+                    except Exception:
+                        pass
+                with self._out_lock:
+                    self._latest_preview = frame
+                    self._frame_seq += 1
+                continue
             try:
-                out = self.pipeline.process(frame)
+                base = self.mirror.process(frame) if self.mirror.enabled else frame
+                if self.enhancer.enabled:
+                    base = self.enhancer.process(base)
+                out = self.background.process(base) if self.background.enabled else base
             except Exception as exc:
                 print("pipeline error:", exc)
+                base = frame
                 out = frame
             if self.vcam is not None:
                 try:
@@ -389,9 +403,6 @@ class AlapCameraApp:
 
             # Build preview frame (shows transparent PNG checkerboard when in cutout mode)
             if self.background.enabled and self.background.mode == "cutout":
-                base = cv2.flip(frame, 1) if self.mirror.enabled else frame
-                if self.enhancer.enabled:
-                    base = cv2.LUT(base, self.enhancer._lut)
                 prev = self.background.render_preview(base, out)
             else:
                 prev = out
@@ -432,10 +443,13 @@ class AlapCameraApp:
             img = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)))
             self.preview.configure(image=img, text="")
             self.preview.image = img
-            face_tag = "  ·  AI Enhance ✓" if self.enhancer.enabled else ""
-            bg_tag = "  ·  BG Cutout ✓" if self.background.enabled else ""
-            self.status.set(f"{w}×{h}  ·  {self._fps:4.1f} FPS{face_tag}{bg_tag}")
-        self.root.after(15, self._update_preview)
+            if self.stream is not None and self.stream.is_busy:
+                self.status.set(f"Kamera '{self.stream.name}' sedang dipakai Streamlabs — ganti ke 'AlapCamera'")
+            else:
+                face_tag = "  ·  AI Enhance ✓" if self.enhancer.enabled else ""
+                bg_tag = "  ·  BG Cutout ✓" if self.background.enabled else ""
+                self.status.set(f"{w}×{h}  ·  {self._fps:4.1f} FPS{face_tag}{bg_tag}")
+        self.root.after(30, self._update_preview)
 
     # --------------------------------------------------------- virtual cam
     def _auto_start_vcam(self) -> None:
@@ -452,6 +466,7 @@ class AlapCameraApp:
                      f"Langsung pilih '{vcam.device_name}' di Streamlabs / OBS.",
                 fg="#34d399",
             )
+            self.drv_btn.pack_forget()
         except Exception:
             self.vcam = None
             self.live_badge.configure(text="● DRIVER BELUM TERPASANG", bg="#3f1d24", fg="#f87171")
@@ -460,6 +475,7 @@ class AlapCameraApp:
                      "Klik tombol di bawah sekali saja untuk mengaktifkan.",
                 fg="#f87171",
             )
+            self.drv_btn.pack(fill="x", pady=(8, 0))
 
     def stop_vcam(self) -> None:
         if self.vcam is not None:

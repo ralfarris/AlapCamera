@@ -20,17 +20,50 @@ class CameraInfo:
     height: int
 
     def __str__(self) -> str:
-        return f"[{self.index}] {self.name} ({self.width}x{self.height})"
+        return f"{self.name} ({self.width}x{self.height})"
 
 
-def list_cameras(max_index: int = 8) -> list[CameraInfo]:
-    """Probe camera indices and return the ones that deliver frames.
+def device_names() -> list[str]:
+    """DirectShow device names in index order (Windows, needs pygrabber)."""
+    if platform.system() != "Windows":
+        return []
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+        return list(FilterGraph().get_input_devices())
+    except Exception:
+        return []
 
-    Virtual cameras (including our own output) are skipped when detectable
-    by name is not possible with OpenCV, so we simply probe indices.
-    """
+
+# our own output device must never be used as an input (feedback loop)
+OWN_DEVICE_NAMES = ("AlapCamera",)
+
+# phone-bridge / software cameras: still selectable, but not picked by default
+_SOFTWARE_HINTS = ("virtual", "camo", "droidcam", "iriun", "obs", "streamlabs",
+                   "bytecast", "unity", "xsplit", "snap camera", "manycam", "lsvcam")
+
+
+def is_software_camera(name: str) -> bool:
+    n = name.lower()
+    return any(h in n for h in _SOFTWARE_HINTS)
+
+
+def default_camera(cams: list["CameraInfo"]) -> int:
+    """Index (into ``cams``) of the best default: first real hardware camera."""
+    for i, c in enumerate(cams):
+        if not is_software_camera(c.name):
+            return i
+    return 0 if cams else -1
+
+
+def list_cameras(max_index: int = 10) -> list[CameraInfo]:
+    """Probe camera indices and return the ones that deliver frames."""
+    names = device_names()
+    count = len(names) if names else max_index
     found: list[CameraInfo] = []
-    for idx in range(max_index):
+    for idx in range(count):
+        name = names[idx] if idx < len(names) else f"Camera {idx}"
+        if any(own.lower() in name.lower() for own in OWN_DEVICE_NAMES):
+            continue
         cap = cv2.VideoCapture(idx, _BACKEND)
         if not cap.isOpened():
             cap.release()
@@ -38,7 +71,7 @@ def list_cameras(max_index: int = 8) -> list[CameraInfo]:
         ok, frame = cap.read()
         if ok and frame is not None:
             h, w = frame.shape[:2]
-            found.append(CameraInfo(idx, f"Camera {idx}", w, h))
+            found.append(CameraInfo(idx, name, w, h))
         cap.release()
     return found
 

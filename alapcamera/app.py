@@ -1,6 +1,7 @@
 """Tkinter desktop UI for AlapCamera."""
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import tkinter as tk
@@ -11,7 +12,7 @@ from PIL import Image, ImageTk
 
 from . import __version__
 from .background import BackgroundProcessor
-from .camera import CameraInfo, CameraStream, list_cameras
+from .camera import CameraInfo, CameraStream, default_camera, list_cameras
 from .enhance import AutoEnhancer
 from .pipeline import MirrorProcessor, Pipeline
 from .virtualcam import VirtualCamera
@@ -54,15 +55,19 @@ class AlapCameraApp:
         main = ttk.Frame(self.root, padding=8)
         main.pack(fill="both", expand=True)
 
-        left = ttk.Frame(main)
-        left.pack(side="left", fill="both", expand=True)
-        self.preview = ttk.Label(left, text="No camera", anchor="center")
-        self.preview.pack(fill="both", expand=True)
-        self.status = tk.StringVar(value="Ready")
-        ttk.Label(left, textvariable=self.status, anchor="w").pack(fill="x", pady=(6, 0))
-
+        # side panel is packed first so it always keeps its width
         self.side = ttk.Frame(main, padding=(10, 0))
         self.side.pack(side="right", fill="y")
+
+        left = ttk.Frame(main)
+        left.pack(side="left", fill="both", expand=True)
+        self.status = tk.StringVar(value="Ready")
+        ttk.Label(left, textvariable=self.status, anchor="w").pack(side="bottom", fill="x", pady=(6, 0))
+        self.preview_box = tk.Frame(left, bg="#111111", width=PREVIEW_W, height=PREVIEW_H)
+        self.preview_box.pack(fill="both", expand=True)
+        self.preview_box.pack_propagate(False)
+        self.preview = tk.Label(self.preview_box, text="No camera", bg="#111111", fg="#bbbbbb")
+        self.preview.pack(fill="both", expand=True)
 
         src = ttk.LabelFrame(self.side, text="Source camera", padding=8)
         src.pack(fill="x")
@@ -196,18 +201,31 @@ class AlapCameraApp:
 
     # --------------------------------------------------------------- cameras
     def refresh_cameras(self) -> None:
+        """Scan cameras in a background thread so the UI never freezes."""
         self.status.set("Scanning cameras...")
-        self.root.update_idletasks()
         self.stop_vcam()
         self.stop_camera()
-        self.cameras = list_cameras()
+        with self._out_lock:
+            self._latest_output = None
+        self.preview.configure(image="", text="Scanning cameras...")
+        self.preview.image = None
+
+        def scan():
+            cams = list_cameras()
+            self.root.after(0, lambda: self._on_cameras(cams))
+
+        threading.Thread(target=scan, daemon=True).start()
+
+    def _on_cameras(self, cams: list[CameraInfo]) -> None:
+        self.cameras = cams
         self.cam_combo["values"] = [str(c) for c in self.cameras]
         if self.cameras:
-            self.cam_combo.current(0)
+            self.cam_combo.current(default_camera(self.cameras))
             self.status.set(f"Found {len(self.cameras)} camera(s)")
             self.start_camera()
         else:
             self.status.set("No camera found")
+            self.preview.configure(text="No camera found")
 
     def start_camera(self) -> None:
         sel = self.cam_combo.current()
@@ -272,8 +290,11 @@ class AlapCameraApp:
             frame = self._latest_output
         if frame is not None:
             h, w = frame.shape[:2]
-            scale = min(PREVIEW_W / w, PREVIEW_H / h)
-            small = cv2.resize(frame, (int(w * scale), int(h * scale)))
+            bw = max(160, self.preview_box.winfo_width())
+            bh = max(90, self.preview_box.winfo_height())
+            scale = min(bw / w, bh / h)
+            small = cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))),
+                               interpolation=cv2.INTER_AREA)
             img = ImageTk.PhotoImage(Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB)))
             self.preview.configure(image=img, text="")
             self.preview.image = img
@@ -321,11 +342,23 @@ class AlapCameraApp:
         self.root.destroy()
 
 
+def _enable_dpi_awareness() -> None:
+    """Crisp UI on high-DPI Windows displays."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+
+
 def run() -> None:
+    _enable_dpi_awareness()
     root = tk.Tk()
     try:
         ttk.Style().theme_use("vista")
     except tk.TclError:
         pass
+    root.geometry("1200x760")
     AlapCameraApp(root)
     root.mainloop()

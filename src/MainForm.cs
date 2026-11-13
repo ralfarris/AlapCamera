@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.5";
+        const string AppVersion = "0.3.6";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -418,7 +418,7 @@ namespace AlapCamera
             byte[] outVcam, outPrev;
             _proc.Process(bgr24, w, h, out outVcam, out outPrev, _splitSwitch.Checked);
 
-            _vcam.SendBgr24(outVcam, w, h);
+            _vcam.SendBgr24(outVcam, w, h, _proc.BgEnabled && _proc.Mode != BgMode.Blur);
 
             lock (_previewLock)
             {

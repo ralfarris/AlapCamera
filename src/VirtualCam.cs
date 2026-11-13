@@ -208,23 +208,65 @@ namespace AlapCamera
             return true;
         }
 
-        public unsafe void SendBgr24(byte[] bgr, int width, int height)
+        public unsafe void SendBgr24(byte[] bgr, int width, int height, bool padGreen = false)
         {
             if (!IsRunning || _view == IntPtr.Zero || bgr == null) return;
-            int need = width * height * 4;
+
+            int outW = width, outH = height;
+            int srcOffY = 0, dstOffX = 0, dstOffY = 0;
+
+            if (width * 9 != height * 16)
+            {
+                if (padGreen && width <= 640 && height <= 480)
+                {
+                    outW = 960;
+                    outH = 540;
+                    dstOffX = (outW - width) / 2;
+                    dstOffY = (outH - height) / 2;
+                }
+                else if (padGreen)
+                {
+                    outW = ((height * 16 / 9 + 15) / 16) * 16;
+                    if (outW < width) outW = ((width + 15) / 16) * 16;
+                    outH = outW * 9 / 16;
+                    dstOffX = (outW - width) / 2;
+                    dstOffY = (outH - height) / 2;
+                }
+                else
+                {
+                    int cropH = (width * 9 / 16) & ~1;
+                    if (cropH > 0 && cropH < height)
+                    {
+                        srcOffY = (height - cropH) / 2;
+                        outH = cropH;
+                    }
+                }
+            }
+
+            int need = outW * outH * 4;
             if (need > _maxFrameBytes) return;
             if (_rgbaBuf == null || _rgbaBuf.Length < need) _rgbaBuf = new byte[need];
 
-            // Convert top-down BGR24 -> bottom-up RGBA32 (UnityCapture FORMAT_UINT8 convention)
             int srcStride = width * 3;
-            int dstStride = width * 4;
+            int dstStride = outW * 4;
+            int copyH = Math.Min(height - srcOffY, outH - dstOffY);
+
             fixed (byte* pSrc = bgr)
             fixed (byte* pDst = _rgbaBuf)
             {
-                for (int y = 0; y < height; y++)
+                if (dstOffX > 0 || dstOffY > 0)
                 {
-                    byte* s = pSrc + y * srcStride;
-                    byte* d = pDst + (height - 1 - y) * dstStride;
+                    // Fill 16:9 canvas with pure green (#00FF00) so Streamlabs Chroma Key removes bars too
+                    uint greenRgba = 0xFF00FF00u; // R=0, G=255, B=0, A=255 in little-endian
+                    uint* uDst = (uint*)pDst;
+                    int totalPx = outW * outH;
+                    for (int i = 0; i < totalPx; i++) uDst[i] = greenRgba;
+                }
+
+                for (int y = 0; y < copyH; y++)
+                {
+                    byte* s = pSrc + (y + srcOffY) * srcStride;
+                    byte* d = pDst + (outH - 1 - (y + dstOffY)) * dstStride + dstOffX * 4;
                     for (int x = 0; x < width; x++)
                     {
                         d[0] = s[2]; // R
@@ -244,9 +286,9 @@ namespace AlapCamera
             {
                 var hdr = (SharedMemHeader*)_view;
                 if (hdr->maxSize > 0 && need > hdr->maxSize) return;
-                hdr->width = width;
-                hdr->height = height;
-                hdr->stride = width;
+                hdr->width = outW;
+                hdr->height = outH;
+                hdr->stride = outW;
                 hdr->format = 0;
                 hdr->resizemode = 1;
                 hdr->mirrormode = 0;

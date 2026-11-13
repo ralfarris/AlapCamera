@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.3";
+        const string AppVersion = "0.3.4";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -205,7 +205,7 @@ namespace AlapCamera
             y += c2.Height + Theme.S(10);
 
             // Card 3: Erase Background
-            var c3 = new StudioCard("3. Erase Background (No Background)") { Location = new Point(Theme.S(12), y), Size = new Size(cw, Theme.S(154)) };
+            var c3 = new StudioCard("3. Erase Background (No Background)") { Location = new Point(Theme.S(12), y), Size = new Size(cw, Theme.S(198)) };
             _bgSwitch = new ToggleSwitch("Erase Background (PNG)", _proc.BgEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
@@ -240,6 +240,18 @@ namespace AlapCamera
             };
             recalBtn.Click += (s, e) => _proc.ResetBackground();
             c3.Controls.Add(recalBtn);
+
+            var tipBox = new Label
+            {
+                Text = "Tips Streamlabs/OBS: Klik kanan source AlapCamera -> Filters -> + -> Chroma Key (hijau) agar background transparan.",
+                Font = Theme.UI(7.8f),
+                ForeColor = Theme.Green,
+                BackColor = Theme.GreenBg,
+                Padding = new Padding(Theme.S(6), Theme.S(4), Theme.S(6), Theme.S(4)),
+                Location = new Point(Theme.S(12), Theme.S(150)),
+                Size = new Size(cw - Theme.S(24), Theme.S(38))
+            };
+            c3.Controls.Add(tipBox);
 
             sidebar.Controls.Add(c3);
             UpdateBgModeButtons();

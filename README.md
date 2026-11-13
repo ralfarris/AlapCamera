@@ -9,6 +9,7 @@ Aplikasi **virtual camera** super ringan untuk Windows (~844 KB single-file `.ex
 2. Download file **`AlapCamera.exe`**.
 3. Langsung jalankan **`AlapCamera.exe`** *(klik **Yes** jika muncul jendela izin Admin agar driver virtual camera `AlapCamera` terbaca oleh Streamlabs/OBS)*.
 4. Buka **Streamlabs Desktop / OBS** → tambahkan atau buka sumber **Video Capture Device** → pada bagian **Device**, pilih **`AlapCamera`**.
+5. *(Opsional untuk mode PNG Cutout)* Klik kanan source **`AlapCamera`** di Streamlabs/OBS → **Filters** → **Edit Filters** → **`+` (Add Filter)** → pilih **Chroma Key** *(hijau)* agar background langsung transparan.
    > **Catatan:** Jangan memilih kamera fisik (misalnya *NYK NEMESIS* / webcam bawaan) secara langsung di Streamlabs supaya tidak bentrok — biarkan **AlapCamera** yang mengambil kamera fisik dan Streamlabs mengambil **`AlapCamera`**.
 
 ---

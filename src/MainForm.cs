@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.4";
+        const string AppVersion = "0.3.5";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -50,7 +50,7 @@ namespace AlapCamera
             ForeColor = Theme.Text;
             Font = Theme.UI(9.5f);
             MinimumSize = new Size(920, 560);
-            ClientSize = new Size(1160, 720);
+            ClientSize = new Size(Theme.S(1160), Theme.S(740));
             StartPosition = FormStartPosition.CenterScreen;
             DoubleBuffered = true;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -155,6 +155,13 @@ namespace AlapCamera
             };
             body.Controls.Add(sidebar);
 
+            var cardsScroll = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                BackColor = Theme.Bg
+            };
+
             int y = 0;
             int cw = Theme.S(306);
 
@@ -180,7 +187,8 @@ namespace AlapCamera
             };
             refBtn.Click += (s, e) => RefreshCameras();
             c1.Controls.Add(refBtn);
-            sidebar.Controls.Add(c1);
+            c1.Location = new Point(0, y);
+            cardsScroll.Controls.Add(c1);
             y += c1.Height + Theme.S(10);
 
             // Card 2: Auto Visual Enhance
@@ -201,11 +209,12 @@ namespace AlapCamera
                 Location = new Point(Theme.S(12), Theme.S(60)),
                 Size = new Size(cw - Theme.S(24), Theme.S(34))
             });
-            sidebar.Controls.Add(c2);
+            c2.Location = new Point(0, y);
+            cardsScroll.Controls.Add(c2);
             y += c2.Height + Theme.S(10);
 
             // Card 3: Erase Background
-            var c3 = new StudioCard("3. Erase Background (No Background)") { Location = new Point(Theme.S(12), y), Size = new Size(cw, Theme.S(198)) };
+            var c3 = new StudioCard("3. Erase Background (No Background)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(208)) };
             _bgSwitch = new ToggleSwitch("Erase Background (PNG)", _proc.BgEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
@@ -243,17 +252,17 @@ namespace AlapCamera
 
             var tipBox = new Label
             {
-                Text = "Tips Streamlabs/OBS: Klik kanan source AlapCamera -> Filters -> + -> Chroma Key (hijau) agar background transparan.",
+                Text = "Tips Streamlabs/OBS: Klik kanan source AlapCamera di panel Sources -> Filters -> Edit Filters -> + -> Chroma Key (hijau).",
                 Font = Theme.UI(7.8f),
                 ForeColor = Theme.Green,
                 BackColor = Theme.GreenBg,
-                Padding = new Padding(Theme.S(6), Theme.S(4), Theme.S(6), Theme.S(4)),
+                Padding = new Padding(Theme.S(6), Theme.S(5), Theme.S(6), Theme.S(5)),
                 Location = new Point(Theme.S(12), Theme.S(150)),
-                Size = new Size(cw - Theme.S(24), Theme.S(38))
+                Size = new Size(cw - Theme.S(24), Theme.S(48))
             };
             c3.Controls.Add(tipBox);
 
-            sidebar.Controls.Add(c3);
+            cardsScroll.Controls.Add(c3);
             UpdateBgModeButtons();
 
             // Card 4: Virtual Camera (Docked Bottom)
@@ -283,6 +292,8 @@ namespace AlapCamera
             c4.Controls.Add(uninstBtn);
 
             sidebar.Controls.Add(c4);
+            sidebar.Controls.Add(cardsScroll);
+            cardsScroll.BringToFront();
 
             // Left Video Stage
             var stageWrap = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(8, 9, 13) };

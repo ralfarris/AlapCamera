@@ -1,28 +1,20 @@
 # AlapCamera
 
-Aplikasi **virtual camera** ultra-ringan untuk Windows (~382 KB single-file `.exe`, native C# / DirectShow): pilih kamera fisik mana saja yang ada di perangkat, tingkatkan visualnya secara otomatis, hapus latar belakang tanpa kain green screen, lalu kirim hasilnya ke kamera virtual **`AlapCamera`** yang langsung terdeteksi di **Streamlabs / OBS / Zoom / Google Meet / Discord**.
+Aplikasi **virtual camera** super ringan untuk Windows (~382 KB single-file `.exe`, tanpa Python & tanpa Chromium/Electron). Hubungkan kamera fisik mana saja, tingkatkan pencahayaan & warna otomatis di ruangan gelap, hapus latar belakang tanpa kain *green screen*, lalu kirim ke **Streamlabs Desktop / OBS / Zoom / Google Meet / Discord**.
 
-## Fitur
+[![Download Latest Release](https://img.shields.io/github/v/release/ralfarris/AlapCamera?label=Download%20AlapCamera&style=for-the-badge&color=7c5cff)](https://github.com/ralfarris/AlapCamera/releases/latest)
 
-| Fitur | Status |
-|---|---|
-| **Single-File Portable (`AlapCamera.exe`)** – tanpa install Python, tanpa ZIP, langsung jalan | ✅ |
-| **Native DirectShow Capture (FPS Penuh)** – menangkap kamera fisik pada resolusi & FPS asli | ✅ |
-| **Auto-Start Virtual Camera (`AlapCamera`)** – driver otomatis terdaftar di HKLM & langsung terbaca Streamlabs/OBS | ✅ |
-| **AI Auto Visual Enhance** – otomatis mencerahkan wajah di ruangan gelap/backlight & menyeimbangkan warna | ✅ |
-| **Erase Background (No Background)** – hapus latar belakang otomatis (*PNG Cutout*, *Green Screen*, *Blur*) | ✅ |
-| **Split Compare (Before/After)** – mode split-screen untuk melihat perbandingan sebelum & sesudah | ✅ |
-| **Auto-save Settings** – pengaturan kamera, enhance, dan background otomatis tersimpan | ✅ |
+## Cara Menggunakan (Untuk Pengguna Langsung)
+1. Buka halaman [**GitHub Releases**](https://github.com/ralfarris/AlapCamera/releases/latest) (atau klik tombol ungu di atas).
+2. Download file **`AlapCamera.exe`**.
+3. Langsung jalankan **`AlapCamera.exe`** *(klik **Yes** jika muncul jendela izin Admin agar driver virtual camera `AlapCamera` terbaca oleh Streamlabs/OBS)*.
+4. Buka **Streamlabs Desktop / OBS** → tambahkan atau buka sumber **Video Capture Device** → pada bagian **Device**, pilih **`AlapCamera`**.
+   > **Catatan:** Jangan memilih kamera fisik (misalnya *NYK NEMESIS* / webcam bawaan) secara langsung di Streamlabs supaya tidak bentrok — biarkan **AlapCamera** yang mengambil kamera fisik dan Streamlabs mengambil **`AlapCamera`**.
 
-## Cara Pakai (Langsung Download `.exe`)
+---
 
-1. Buka halaman **[Releases](https://github.com/ralfarris/AlapCamera/releases)** lalu download **`AlapCamera.exe`**.
-2. Jalankan **`AlapCamera.exe`** *(klik **Yes** pada jendela Admin agar driver `AlapCamera` terbaca oleh Streamlabs Desktop / OBS)*.
-3. Di **Streamlabs / OBS**, tambahkan *Video Capture Device* lalu pilih **`AlapCamera`**.
-
-## Build dari Source (Tanpa Install SDK Tambahan)
-
-Dikompilasi menggunakan compiler C# bawaan Windows (`.NET Framework 4.x`):
+## Build dari Source Code (Developer)
+Tidak perlu install SDK tambahan — dikompilasi langsung menggunakan compiler C# bawaan Windows (`.NET Framework 4.x`):
 
 ```powershell
 .\build.bat
@@ -31,10 +23,19 @@ atau:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
-Hasil build tersedia di `dist\AlapCamera.exe`.
+
+Hasil executable siap pakai akan dibuat di **`dist\AlapCamera.exe`**.
+
+## Fitur
+- **Single-File Portable (`AlapCamera.exe`)** – cukup 1 file `.exe` (~382 KB), langsung jalan tanpa install Python atau ekstrak ZIP.
+- **Native DirectShow Capture (FPS Penuh)** – menangkap kamera fisik pada resolusi & FPS asli tanpa lag, dilengkapi kalibrasi sensor otomatis agar ruangan gelap tidak pecah.
+- **Auto-Start Virtual Camera (`AlapCamera`)** – driver otomatis terdaftar di sistem Windows (`HKLM`) dan langsung terdeteksi oleh Streamlabs Desktop, OBS, Zoom, dan Discord.
+- **Auto Visual Enhance** – otomatis mencerahkan wajah di ruangan gelap/backlight dan menyeimbangkan warna secara real-time.
+- **Erase Background (No Background)** – hapus latar belakang otomatis tanpa kain green screen (*PNG Cutout*, *Green Screen*, *Blur*).
+- **Split Compare (Before/After)** – mode layar terbagi untuk membandingkan kamera asli dengan hasil olahan secara langsung.
+- **Auto-Save Settings** – pilihan kamera dan pengaturan efek otomatis tersimpan.
 
 ## Struktur Proyek
-
 ```text
 src/
   Program.cs         # entry point & DPI awareness

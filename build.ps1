@@ -13,7 +13,7 @@ $ico = Join-Path $root 'assets\alapcamera.ico'
 $icoParam = if (Test-Path $ico) { "/win32icon:$ico" } else { "" }
 
 $resParams = @()
-foreach ($dll in @('AlapMfCam64.dll', 'UnityCaptureFilter64.dll', 'UnityCaptureFilter32.dll')) {
+foreach ($dll in @('UnityCaptureFilter64.dll', 'UnityCaptureFilter32.dll')) {
     $p = Join-Path $root "assets\$dll"
     if (Test-Path $p) {
         $resParams += "/resource:$p,AlapCamera.Drivers.$dll"

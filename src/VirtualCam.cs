@@ -12,6 +12,7 @@ namespace AlapCamera
     {
         public const string DeviceName = "AlapCamera";
         const string UnityClsid = "{5C2CD55C-92AD-4999-8666-912BD3E70010}";
+        const string MfClsid = "{A1A9C0DE-0001-4000-8000-414C41504341}";
         const string VideoCat = "{860BB310-5D01-11D0-BD3B-00A0C911CE86}";
 
         const uint FILE_MAP_ALL_ACCESS = 0xF001F;
@@ -66,7 +67,6 @@ namespace AlapCamera
         IntPtr _view;
         int _maxFrameBytes;
         byte[] _rgbaBuf;
-        readonly MfVirtualCam _mf = new MfVirtualCam();
 
         public bool IsRunning { get; private set; }
         public string BackendName { get; private set; }
@@ -210,11 +210,6 @@ namespace AlapCamera
 
         public unsafe void SendBgr24(byte[] bgr, int width, int height)
         {
-            if (_mf.IsRunning)
-            {
-                _mf.SendBgr24(bgr, width, height);
-                return;
-            }
             if (!IsRunning || _view == IntPtr.Zero || bgr == null) return;
             int need = width * height * 4;
             if (need > _maxFrameBytes) return;
@@ -271,7 +266,6 @@ namespace AlapCamera
         public void Stop()
         {
             IsRunning = false;
-            _mf.Stop();
             if (_view != IntPtr.Zero) { UnmapViewOfFile(_view); _view = IntPtr.Zero; }
             if (_map != IntPtr.Zero) { CloseHandle(_map); _map = IntPtr.Zero; }
             if (_wantEvent != IntPtr.Zero) { CloseHandle(_wantEvent); _wantEvent = IntPtr.Zero; }
@@ -313,7 +307,7 @@ namespace AlapCamera
 
             foreach (string sub in new[]
             {
-                @"SOFTWARE\Classes\CLSID\" + MfVirtualCam.ClsidStr,
+                @"SOFTWARE\Classes\CLSID\" + MfClsid,
                 @"SOFTWARE\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
                 @"SOFTWARE\Classes\CLSID\" + UnityClsid,
                 @"SOFTWARE\WOW6432Node\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
@@ -325,7 +319,7 @@ namespace AlapCamera
 
             foreach (string cu in new[]
             {
-                @"Software\Classes\CLSID\" + MfVirtualCam.ClsidStr,
+                @"Software\Classes\CLSID\" + MfClsid,
                 @"Software\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
                 @"Software\Classes\CLSID\" + UnityClsid
             })

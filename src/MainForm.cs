@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.2";
+        const string AppVersion = "0.3.3";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -553,7 +553,7 @@ namespace AlapCamera
                     "AlapCamera");
 
                 string cmd = string.Format(
-                    "/c ping 127.0.0.1 -n 2 > nul & del /f /q \"{0}\" & if exist \"{1}\" rmdir /s /q \"{1}\" & if exist \"{2}\" rmdir /s /q \"{2}\"",
+                    "/c timeout /t 2 /nobreak > nul & del /f /q \"{0}\" & if exist \"{1}\" rmdir /s /q \"{1}\" & if exist \"{2}\" rmdir /s /q \"{2}\"",
                     exePath, appDataDir, progDataDir);
 
                 var psi = new ProcessStartInfo("cmd.exe", cmd)

@@ -1,7 +1,7 @@
-"""Create or update a GitHub Release for AlapCamera.
+"""Create or update a GitHub Release for AlapCamera (uploads standalone AlapCamera.exe).
 
 Usage:
-    python scripts/release.py            # creates or updates release for current __version__ (e.g. v0.1.0)
+    python scripts/release.py            # creates or updates release for v0.2.0
     python scripts/release.py v0.2.0     # creates or updates release for tag v0.2.0
 """
 from __future__ import annotations
@@ -12,15 +12,12 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-from alapcamera import __version__  # noqa: E402
-
 REPO = "ralfarris/AlapCamera"
 API_BASE = f"https://api.github.com/repos/{REPO}"
+DEFAULT_TAG = "v0.2.0"
 
 
 def get_github_token() -> str:
@@ -40,26 +37,16 @@ def get_github_token() -> str:
     raise RuntimeError("Could not obtain GitHub token from git credential helper or GH_TOKEN.")
 
 
-def build_zip(tag: str) -> Path:
-    dist_dir = ROOT / "dist"
-    dist_dir.mkdir(exist_ok=True)
-    zip_path = dist_dir / f"AlapCamera-{tag}-windows.zip"
-    include_files = [
-        "main.py",
-        "run.bat",
-        "requirements.txt",
-        "README.md",
-        "scripts/install_virtualcam.ps1",
-        "scripts/release.py",
-    ]
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel in include_files:
-            p = ROOT / rel
-            if p.exists():
-                zf.write(p, f"AlapCamera/{rel}")
-        for p in sorted((ROOT / "alapcamera").glob("*.py")):
-            zf.write(p, f"AlapCamera/alapcamera/{p.name}")
-    return zip_path
+def build_exe() -> Path:
+    subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "build.ps1")],
+        cwd=ROOT,
+        check=True,
+    )
+    exe_path = ROOT / "dist" / "AlapCamera.exe"
+    if not exe_path.exists():
+        raise FileNotFoundError(f"Expected built executable at {exe_path}")
+    return exe_path
 
 
 def gh_request(method: str, url: str, token: str, data: dict | bytes | None = None,
@@ -91,26 +78,24 @@ def ensure_tag_pushed(tag: str) -> None:
 def release_notes(tag: str) -> str:
     return (
         f"## AlapCamera {tag}\n\n"
-        "Aplikasi virtual camera untuk Windows dengan **AI Auto Visual Enhance** dan **AI Background Removal**.\n\n"
+        "Aplikasi virtual camera ultra-ringan untuk Windows (~382 KB single-file `.exe`, tanpa Python).\n\n"
         "### Fitur Utama\n"
-        "- **Auto Visual Enhance**: Face-priority auto exposure (BlazeFace AI), low-light boost (CLAHE), "
-        "auto white balance, low-light color preservation, adaptive bilateral denoise, dan unsharp mask.\n"
-        "- **AI Background**: Blur (bokeh), Remove (solid color / chroma key green screen), dan custom Image background "
-        "dengan pilihan model `fast` dan `quality`.\n"
-        "- **Virtual Camera Output**: Terintegrasi dengan OBS, Streamlabs, Zoom, Google Meet, dan Discord melalui perangkat "
-        "`AlapCamera` (`scripts/install_virtualcam.ps1`) atau fallback ke OBS Virtual Camera.\n"
-        "- **Compare (Before/After)** & **Auto-save Settings**.\n\n"
-        "### Cara Menjalankan\n"
-        "1. Ekstrak file ZIP lalu klik dua kali **`run.bat`** (otomatis menginstal dependency Python jika belum ada).\n"
-        "2. Klik **Install 'AlapCamera' device...** (cukup sekali saat pertama kali) untuk mendaftarkan kamera virtual.\n"
-        "3. Klik **Start virtual camera**.\n"
+        "- **DirectShow Native Capture (FPS Penuh)**: Capture langsung dari kamera fisik pada resolusi & FPS asli.\n"
+        "- **Auto Visual Enhance**: Otomatis mencerahkan wajah di ruangan gelap/backlight & menyeimbangkan warna.\n"
+        "- **Erase Background (No Background)**: Hapus latar belakang otomatis tanpa kain green screen (*PNG Cutout*, *Green Screen*, *Blur*).\n"
+        "- **Auto-Start Virtual Camera (`AlapCamera`)**: Otomatis memasang driver & langsung terdeteksi di Streamlabs Desktop, OBS, Zoom, dan Discord.\n"
+        "- **Split Compare (Before/After)** & **Auto-save Settings**.\n\n"
+        "### Cara Pakai\n"
+        "1. Download **`AlapCamera.exe`** di bawah.\n"
+        "2. Klik dua kali **`AlapCamera.exe`** (klik *Yes* pada jendela Admin agar driver `AlapCamera` terbaca oleh Streamlabs/OBS).\n"
+        "3. Di Streamlabs / OBS, pilih **`AlapCamera`** pada dropdown *Video Capture Device*.\n"
     )
 
 
 def create_or_update_release(tag: str) -> str:
     token = get_github_token()
     ensure_tag_pushed(tag)
-    zip_path = build_zip(tag)
+    exe_path = build_exe()
 
     payload = {
         "tag_name": tag,
@@ -131,19 +116,18 @@ def create_or_update_release(tag: str) -> str:
         rel = gh_request("POST", f"{API_BASE}/releases", token, payload)
         action = "Created"
 
-    # Replace existing asset with the same name if present
     for asset in rel.get("assets", []):
-        if asset.get("name") == zip_path.name:
+        if asset.get("name") == exe_path.name:
             gh_request("DELETE", f"{API_BASE}/releases/assets/{asset['id']}", token)
 
-    upload_url = rel["upload_url"].split("{", 1)[0] + f"?name={zip_path.name}"
-    gh_request("POST", upload_url, token, zip_path.read_bytes(), content_type="application/zip")
+    upload_url = rel["upload_url"].split("{", 1)[0] + f"?name={exe_path.name}"
+    gh_request("POST", upload_url, token, exe_path.read_bytes(), content_type="application/octet-stream")
     print(f"{action} release {tag}: {rel['html_url']}")
     return rel["html_url"]
 
 
 if __name__ == "__main__":
-    target_tag = sys.argv[1] if len(sys.argv) > 1 else f"v{__version__}"
+    target_tag = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TAG
     if not target_tag.startswith("v"):
         target_tag = f"v{target_tag}"
     create_or_update_release(target_tag)

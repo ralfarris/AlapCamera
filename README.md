@@ -1,8 +1,8 @@
 # AlapCamera
 
-Aplikasi **virtual camera** super ringan untuk Windows (~382 KB single-file `.exe`, tanpa Python & tanpa Chromium/Electron). Hubungkan kamera fisik mana saja, tingkatkan pencahayaan & warna otomatis di ruangan gelap, hapus latar belakang tanpa kain *green screen*, lalu kirim ke **Streamlabs Desktop / OBS / Zoom / Google Meet / Discord**.
+Aplikasi **virtual camera** super ringan untuk Windows (~844 KB single-file `.exe` termasuk model AI *Selfie Segmentation*, tanpa Python & tanpa Chromium/Electron). Hubungkan kamera fisik mana saja, tingkatkan pencahayaan & warna otomatis di ruangan gelap, hapus latar belakang tanpa kain *green screen*, lalu kirim ke **Streamlabs Desktop / OBS / Zoom / Google Meet / Discord**.
 
-[![Download Latest Release](https://img.shields.io/github/v/release/ralfarris/AlapCamera?label=Download%20AlapCamera&style=for-the-badge&color=7c5cff)](https://github.com/ralfarris/AlapCamera/releases/latest)
+[![Download Latest Release](https://img.shields.io/github/v/release/ralfarris/AlapCamera?label=Download%20AlapCamera&style=for-the-badge&color=7c5cff&cacheSeconds=60)](https://github.com/ralfarris/AlapCamera/releases/latest)
 
 ## Cara Menggunakan (Untuk Pengguna Langsung)
 1. Buka halaman [**GitHub Releases**](https://github.com/ralfarris/AlapCamera/releases/latest) (atau klik tombol ungu di atas).

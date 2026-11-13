@@ -207,7 +207,7 @@ namespace AlapCamera
             }
 
             CheckStatus(createOpts(out _opts));
-            CheckStatus(setThreads(_opts, 4));
+            CheckStatus(setThreads(_opts, 2));
 
             IntPtr modelPtr = Marshal.AllocHGlobal(modelBytes.Length);
             try

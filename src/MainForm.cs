@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.6";
+        const string AppVersion = "0.3.7";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -36,7 +36,6 @@ namespace AlapCamera
         Label _liveBadge, _statusLbl, _vcamInfoLbl;
         ComboBox _camCombo;
         ToggleSwitch _enhSwitch, _bgSwitch, _mirrorSwitch, _splitSwitch;
-        FlatBtn _btnCutout, _btnGreen, _btnBlur;
         Timer _uiTimer;
 
         static readonly string SettingsPath = Path.Combine(
@@ -213,9 +212,9 @@ namespace AlapCamera
             cardsScroll.Controls.Add(c2);
             y += c2.Height + Theme.S(10);
 
-            // Card 3: Erase Background
-            var c3 = new StudioCard("3. Erase Background (No Background)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(208)) };
-            _bgSwitch = new ToggleSwitch("Erase Background (PNG)", _proc.BgEnabled)
+            // Card 3: AI Green Screen
+            var c3 = new StudioCard("3. AI Green Screen") { Location = new Point(0, y), Size = new Size(cw, Theme.S(154)) };
+            _bgSwitch = new ToggleSwitch("Green Screen Otomatis", _proc.BgEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
                 Width = cw - Theme.S(24)
@@ -225,30 +224,12 @@ namespace AlapCamera
 
             c3.Controls.Add(new Label
             {
-                Text = "Hapus latar belakang otomatis tanpa kain green screen.",
+                Text = "Hapus latar belakang otomatis menjadi Green Screen.",
                 Font = Theme.UI(8f),
                 ForeColor = Theme.Muted,
                 Location = new Point(Theme.S(12), Theme.S(58)),
                 Size = new Size(cw - Theme.S(24), Theme.S(20))
             });
-
-            int bw = (cw - Theme.S(32)) / 3;
-            _btnCutout = new FlatBtn("PNG Cutout") { Location = new Point(Theme.S(12), Theme.S(84)), Size = new Size(bw, Theme.S(30)) };
-            _btnGreen = new FlatBtn("Green Screen") { Location = new Point(Theme.S(16) + bw, Theme.S(84)), Size = new Size(bw, Theme.S(30)) };
-            _btnBlur = new FlatBtn("Blur") { Location = new Point(Theme.S(20) + bw * 2, Theme.S(84)), Size = new Size(bw, Theme.S(30)) };
-            _btnCutout.Click += (s, e) => SetBgMode(BgMode.Cutout);
-            _btnGreen.Click += (s, e) => SetBgMode(BgMode.GreenScreen);
-            _btnBlur.Click += (s, e) => SetBgMode(BgMode.Blur);
-            c3.Controls.AddRange(new Control[] { _btnCutout, _btnGreen, _btnBlur });
-
-            var recalBtn = new FlatBtn("↺  Recalibrate Background")
-            {
-                Location = new Point(Theme.S(12), Theme.S(118)),
-                Size = new Size(cw - Theme.S(24), Theme.S(26)),
-                Font = Theme.UI(8f)
-            };
-            recalBtn.Click += (s, e) => _proc.ResetBackground();
-            c3.Controls.Add(recalBtn);
 
             var tipBox = new Label
             {
@@ -256,14 +237,13 @@ namespace AlapCamera
                 Font = Theme.UI(7.8f),
                 ForeColor = Theme.Green,
                 BackColor = Theme.GreenBg,
-                Padding = new Padding(Theme.S(6), Theme.S(5), Theme.S(6), Theme.S(5)),
-                Location = new Point(Theme.S(12), Theme.S(150)),
-                Size = new Size(cw - Theme.S(24), Theme.S(48))
+                Padding = new Padding(Theme.S(6), Theme.S(6), Theme.S(6), Theme.S(6)),
+                Location = new Point(Theme.S(12), Theme.S(86)),
+                Size = new Size(cw - Theme.S(24), Theme.S(54))
             };
             c3.Controls.Add(tipBox);
 
             cardsScroll.Controls.Add(c3);
-            UpdateBgModeButtons();
 
             // Card 4: Virtual Camera (Docked Bottom)
             var c4 = new StudioCard("Virtual Camera (Auto-Start)")
@@ -333,21 +313,6 @@ namespace AlapCamera
             _stage.Paint += OnStagePaint;
             stageWrap.Controls.Add(_stage);
             _stage.BringToFront();
-        }
-
-        void SetBgMode(BgMode m)
-        {
-            _proc.Mode = m;
-            _proc.BgEnabled = true;
-            _bgSwitch.Checked = true;
-            UpdateBgModeButtons();
-        }
-
-        void UpdateBgModeButtons()
-        {
-            _btnCutout.Active = _proc.Mode == BgMode.Cutout;
-            _btnGreen.Active = _proc.Mode == BgMode.GreenScreen;
-            _btnBlur.Active = _proc.Mode == BgMode.Blur;
         }
 
         void UpdateVcamBadge()
@@ -445,6 +410,7 @@ namespace AlapCamera
 
         void RefreshPreview()
         {
+            if (WindowState == FormWindowState.Minimized) return;
             if (_cap != null && _cap.IsBusy)
             {
                 _isBusy = true;
@@ -516,11 +482,7 @@ namespace AlapCamera
                 if (d.ContainsKey("mirror")) _proc.Mirror = Convert.ToBoolean(d["mirror"]);
                 if (d.ContainsKey("enhance")) _proc.EnhanceEnabled = Convert.ToBoolean(d["enhance"]);
                 if (d.ContainsKey("bgEnabled")) _proc.BgEnabled = Convert.ToBoolean(d["bgEnabled"]);
-                if (d.ContainsKey("bgMode") && d["bgMode"] != null)
-                {
-                    BgMode m;
-                    if (Enum.TryParse(d["bgMode"].ToString(), true, out m)) _proc.Mode = m;
-                }
+                _proc.Mode = BgMode.GreenScreen;
             }
             catch { }
         }

@@ -9,13 +9,14 @@ namespace AlapCamera
         public bool Mirror = true;
         public bool EnhanceEnabled = true;
         public bool BgEnabled = true;
-        public BgMode Mode = BgMode.Cutout;
+        public BgMode Mode = BgMode.GreenScreen;
 
         // Auto-enhance state (EMA smoothed)
         float _emaGamma = 1.0f;
         float _emaGainB = 1.0f, _emaGainG = 1.0f, _emaGainR = 1.0f;
         float _emaLift = 0.0f;
         int _frameIdx;
+        int _segFrameIdx;
         readonly byte[] _lutB = new byte[256];
         readonly byte[] _lutG = new byte[256];
         readonly byte[] _lutR = new byte[256];
@@ -69,23 +70,29 @@ namespace AlapCamera
 
             if (BgEnabled)
             {
-                if (_onnx.IsAvailable && _onnx.Infer(_workBuf, w, h, _aiMask))
+                if (_onnx.IsAvailable)
                 {
-                    if (_maskSmooth == null || _maskSmooth.Length != Mw * Mh)
+                    // Run AI inference every 2nd frame (15 Hz mask, full 30 FPS output) to cut CPU ~50%
+                    if (_maskSmooth == null || (_segFrameIdx++ & 1) == 0)
                     {
-                        _maskSmooth = new float[Mw * Mh];
-                        Buffer.BlockCopy(_aiMask, 0, _maskSmooth, 0, _aiMask.Length * sizeof(float));
-                    }
-                    else
-                    {
-                        for (int i = 0; i < _aiMask.Length; i++)
+                        if (_onnx.Infer(_workBuf, w, h, _aiMask))
                         {
-                            float a = _aiMask[i];
-                            // Soft contrast curve to eliminate faint halo/holes while preserving hair edges
-                            a = (a - 0.15f) / 0.70f;
-                            if (a < 0f) a = 0f;
-                            else if (a > 1f) a = 1f;
-                            _maskSmooth[i] = 0.70f * a + 0.30f * _maskSmooth[i];
+                            if (_maskSmooth == null || _maskSmooth.Length != Mw * Mh)
+                            {
+                                _maskSmooth = new float[Mw * Mh];
+                                Buffer.BlockCopy(_aiMask, 0, _maskSmooth, 0, _aiMask.Length * sizeof(float));
+                            }
+                            else
+                            {
+                                for (int i = 0; i < _aiMask.Length; i++)
+                                {
+                                    float a = _aiMask[i];
+                                    a = (a - 0.15f) / 0.70f;
+                                    if (a < 0f) a = 0f;
+                                    else if (a > 1f) a = 1f;
+                                    _maskSmooth[i] = 0.70f * a + 0.30f * _maskSmooth[i];
+                                }
+                            }
                         }
                     }
                 }

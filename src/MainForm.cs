@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.7";
+        const string AppVersion = "0.3.8";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -212,9 +212,9 @@ namespace AlapCamera
             cardsScroll.Controls.Add(c2);
             y += c2.Height + Theme.S(10);
 
-            // Card 3: AI Green Screen
-            var c3 = new StudioCard("3. AI Green Screen") { Location = new Point(0, y), Size = new Size(cw, Theme.S(154)) };
-            _bgSwitch = new ToggleSwitch("Green Screen Otomatis", _proc.BgEnabled)
+            // Card 3: Erase Background (PNG Cutout)
+            var c3 = new StudioCard("3. Erase Background (PNG Cutout)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(154)) };
+            _bgSwitch = new ToggleSwitch("Erase Background (PNG)", _proc.BgEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
                 Width = cw - Theme.S(24)
@@ -224,7 +224,7 @@ namespace AlapCamera
 
             c3.Controls.Add(new Label
             {
-                Text = "Hapus latar belakang otomatis menjadi Green Screen.",
+                Text = "Hapus latar belakang otomatis tanpa kain green screen.",
                 Font = Theme.UI(8f),
                 ForeColor = Theme.Muted,
                 Location = new Point(Theme.S(12), Theme.S(58)),
@@ -482,7 +482,7 @@ namespace AlapCamera
                 if (d.ContainsKey("mirror")) _proc.Mirror = Convert.ToBoolean(d["mirror"]);
                 if (d.ContainsKey("enhance")) _proc.EnhanceEnabled = Convert.ToBoolean(d["enhance"]);
                 if (d.ContainsKey("bgEnabled")) _proc.BgEnabled = Convert.ToBoolean(d["bgEnabled"]);
-                _proc.Mode = BgMode.GreenScreen;
+                _proc.Mode = BgMode.Cutout;
             }
             catch { }
         }

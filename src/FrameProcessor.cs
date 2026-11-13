@@ -9,7 +9,7 @@ namespace AlapCamera
         public bool Mirror = true;
         public bool EnhanceEnabled = true;
         public bool BgEnabled = true;
-        public BgMode Mode = BgMode.GreenScreen;
+        public BgMode Mode = BgMode.Cutout;
 
         // Auto-enhance state (EMA smoothed)
         float _emaGamma = 1.0f;

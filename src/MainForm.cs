@@ -11,7 +11,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.2.0";
+        const string AppVersion = "0.3.0";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -316,12 +316,12 @@ namespace AlapCamera
 
         void UpdateVcamBadge()
         {
-            if (VirtualCam.IsHklmRegistered() && _vcam.IsRunning)
+            if (_vcam.IsRunning)
             {
                 _liveBadge.Text = "● LIVE · " + VirtualCam.DeviceName;
                 _liveBadge.BackColor = Theme.GreenBg;
                 _liveBadge.ForeColor = Theme.Green;
-                _vcamInfoLbl.Text = "Aktif mengirim ke '" + VirtualCam.DeviceName + "'.\nPilih '" + VirtualCam.DeviceName + "' di Streamlabs / OBS / Zoom.";
+                _vcamInfoLbl.Text = "Aktif (" + (_vcam.BackendName ?? "VirtualCam") + ").\nPilih '" + VirtualCam.DeviceName + "' di Streamlabs / OBS / Zoom.";
                 _vcamInfoLbl.ForeColor = Theme.Green;
             }
             else
@@ -514,6 +514,7 @@ namespace AlapCamera
             if (_uiTimer != null) _uiTimer.Stop();
             StopCamera();
             _vcam.Dispose();
+            _proc.Dispose();
             if (_bmp != null) _bmp.Dispose();
         }
 

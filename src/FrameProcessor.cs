@@ -4,7 +4,7 @@ namespace AlapCamera
 {
     enum BgMode { Cutout, GreenScreen, Blur }
 
-    sealed class FrameProcessor
+    sealed class FrameProcessor : IDisposable
     {
         public bool Mirror = true;
         public bool EnhanceEnabled = true;
@@ -20,19 +20,28 @@ namespace AlapCamera
         readonly byte[] _lutG = new byte[256];
         readonly byte[] _lutR = new byte[256];
 
-        // Background segmentation state (160x120)
-        const int Mw = 160, Mh = 120;
-        byte[] _bgRef;       // 160*120*3 static background reference
-        float[] _maskSmooth; // 160*120 smoothed alpha [0..1]
-        byte[] _smallRgb;    // 160*120*3
+        // Background segmentation state (256x256)
+        const int Mw = 256, Mh = 256;
+        readonly OnnxSeg _onnx = new OnnxSeg();
+        readonly float[] _aiMask = new float[Mw * Mh];
+        byte[] _bgRef;       // 256*256*3 static background reference (fallback)
+        float[] _maskSmooth; // 256*256 smoothed alpha [0..1]
+        byte[] _smallRgb;    // 256*256*3
         byte[] _blurBuf;
         byte[] _workBuf;
         byte[] _rawCopy;
+
+        public string SegStatus { get { return _onnx.StatusText; } }
 
         public FrameProcessor()
         {
             for (int i = 0; i < 256; i++)
                 _lutB[i] = _lutG[i] = _lutR[i] = (byte)i;
+        }
+
+        public void Dispose()
+        {
+            _onnx.Dispose();
         }
 
         public void ResetBackground()
@@ -60,8 +69,31 @@ namespace AlapCamera
 
             if (BgEnabled)
             {
-                if (_bgRef == null) InitBackground(_workBuf, w, h);
-                UpdateMask(_workBuf, w, h);
+                if (_onnx.IsAvailable && _onnx.Infer(_workBuf, w, h, _aiMask))
+                {
+                    if (_maskSmooth == null || _maskSmooth.Length != Mw * Mh)
+                    {
+                        _maskSmooth = new float[Mw * Mh];
+                        Buffer.BlockCopy(_aiMask, 0, _maskSmooth, 0, _aiMask.Length * sizeof(float));
+                    }
+                    else
+                    {
+                        for (int i = 0; i < _aiMask.Length; i++)
+                        {
+                            float a = _aiMask[i];
+                            // Soft contrast curve to eliminate faint halo/holes while preserving hair edges
+                            a = (a - 0.15f) / 0.70f;
+                            if (a < 0f) a = 0f;
+                            else if (a > 1f) a = 1f;
+                            _maskSmooth[i] = 0.70f * a + 0.30f * _maskSmooth[i];
+                        }
+                    }
+                }
+                else
+                {
+                    if (_bgRef == null) InitBackground(_workBuf, w, h);
+                    UpdateMask(_workBuf, w, h);
+                }
                 ApplyBackground(_workBuf, w, h, out outVcam, out outPreview);
             }
             else

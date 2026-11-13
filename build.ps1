@@ -13,11 +13,15 @@ $ico = Join-Path $root 'assets\alapcamera.ico'
 $icoParam = if (Test-Path $ico) { "/win32icon:$ico" } else { "" }
 
 $resParams = @()
-foreach ($dll in @('UnityCaptureFilter64.dll', 'UnityCaptureFilter32.dll')) {
+foreach ($dll in @('AlapMfCam64.dll', 'UnityCaptureFilter64.dll', 'UnityCaptureFilter32.dll')) {
     $p = Join-Path $root "assets\$dll"
     if (Test-Path $p) {
         $resParams += "/resource:$p,AlapCamera.Drivers.$dll"
     }
+}
+$onnx = Join-Path $root 'assets\selfie_segmentation.onnx'
+if (Test-Path $onnx) {
+    $resParams += "/resource:$onnx,AlapCamera.Models.selfie_segmentation.onnx"
 }
 
 & $csc /nologo /target:winexe /optimize+ /unsafe /platform:anycpu /codepage:65001 `

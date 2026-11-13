@@ -66,8 +66,10 @@ namespace AlapCamera
         IntPtr _view;
         int _maxFrameBytes;
         byte[] _rgbaBuf;
+        readonly MfVirtualCam _mf = new MfVirtualCam();
 
         public bool IsRunning { get; private set; }
+        public string BackendName { get; private set; }
 
         public static bool EnsureRegistered()
         {
@@ -175,6 +177,15 @@ namespace AlapCamera
         public bool Start(int maxWidth = 1920, int maxHeight = 1080)
         {
             Stop();
+
+            if (MfVirtualCam.IsSupported() && _mf.Start(DeviceName))
+            {
+                BackendName = "MF VirtualCam (Streamlabs/OBS/Zoom)";
+                IsRunning = true;
+                return true;
+            }
+
+            BackendName = "DirectShow";
             EnsureRegistered();
             _maxFrameBytes = maxWidth * maxHeight * 4;
             int totalBytes = Marshal.SizeOf(typeof(SharedMemHeader)) + _maxFrameBytes;
@@ -206,6 +217,11 @@ namespace AlapCamera
 
         public unsafe void SendBgr24(byte[] bgr, int width, int height)
         {
+            if (_mf.IsRunning)
+            {
+                _mf.SendBgr24(bgr, width, height);
+                return;
+            }
             if (!IsRunning || _view == IntPtr.Zero || bgr == null) return;
             int need = width * height * 4;
             if (need > _maxFrameBytes) return;
@@ -262,6 +278,7 @@ namespace AlapCamera
         public void Stop()
         {
             IsRunning = false;
+            _mf.Stop();
             if (_view != IntPtr.Zero) { UnmapViewOfFile(_view); _view = IntPtr.Zero; }
             if (_map != IntPtr.Zero) { CloseHandle(_map); _map = IntPtr.Zero; }
             if (_wantEvent != IntPtr.Zero) { CloseHandle(_wantEvent); _wantEvent = IntPtr.Zero; }

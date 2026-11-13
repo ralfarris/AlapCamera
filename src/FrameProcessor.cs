@@ -6,7 +6,7 @@ namespace AlapCamera
 
     sealed class FrameProcessor : IDisposable
     {
-        public bool Mirror = true;
+        public bool Mirror = false;
         public bool EnhanceEnabled = true;
         public bool BgEnabled = true;
         public BgMode Mode = BgMode.Cutout;

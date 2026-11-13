@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.8";
+        const string AppVersion = "0.3.9";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -35,7 +35,7 @@ namespace AlapCamera
         Panel _stage;
         Label _liveBadge, _statusLbl, _vcamInfoLbl;
         ComboBox _camCombo;
-        ToggleSwitch _enhSwitch, _bgSwitch, _mirrorSwitch, _splitSwitch;
+        ToggleSwitch _enhSwitch, _bgSwitch, _splitSwitch;
         Timer _uiTimer;
 
         static readonly string SettingsPath = Path.Combine(
@@ -202,7 +202,7 @@ namespace AlapCamera
 
             c2.Controls.Add(new Label
             {
-                Text = "Otomatis mencerahkan wajah di ruangan gelap, menyeimbangkan warna & menjaga FPS penuh.",
+                Text = "Otomatis mencerahkan wajah di ruangan gelap, menyeimbangkan warna, dan menjaga FPS penuh.",
                 Font = Theme.UI(8f),
                 ForeColor = Theme.Muted,
                 Location = new Point(Theme.S(12), Theme.S(60)),
@@ -294,17 +294,9 @@ namespace AlapCamera
             };
             stageWrap.Controls.Add(bar);
 
-            _mirrorSwitch = new ToggleSwitch("Mirror Video", _proc.Mirror)
-            {
-                Location = new Point(Theme.S(14), Theme.S(7)),
-                Width = Theme.S(145)
-            };
-            _mirrorSwitch.CheckedChanged += (s, e) => _proc.Mirror = _mirrorSwitch.Checked;
-            bar.Controls.Add(_mirrorSwitch);
-
             _splitSwitch = new ToggleSwitch("Split Compare (Before / After)", false)
             {
-                Location = new Point(Theme.S(180), Theme.S(7)),
+                Location = new Point(Theme.S(14), Theme.S(7)),
                 Width = Theme.S(255)
             };
             bar.Controls.Add(_splitSwitch);
@@ -479,7 +471,7 @@ namespace AlapCamera
                 var d = js.Deserialize<Dictionary<string, object>>(File.ReadAllText(SettingsPath));
                 if (d == null) return;
                 if (d.ContainsKey("camera") && d["camera"] != null) _preferredCam = d["camera"].ToString();
-                if (d.ContainsKey("mirror")) _proc.Mirror = Convert.ToBoolean(d["mirror"]);
+                _proc.Mirror = false;
                 if (d.ContainsKey("enhance")) _proc.EnhanceEnabled = Convert.ToBoolean(d["enhance"]);
                 if (d.ContainsKey("bgEnabled")) _proc.BgEnabled = Convert.ToBoolean(d["bgEnabled"]);
                 _proc.Mode = BgMode.Cutout;

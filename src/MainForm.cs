@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -23,6 +24,7 @@ namespace AlapCamera
         int _previewW, _previewH;
         long _frameSeq, _shownSeq = -1;
         Bitmap _bmp;
+        bool _uninstalling;
         bool _isBusy;
         string _busyCamName = "";
         double _fps;
@@ -246,7 +248,7 @@ namespace AlapCamera
             var c4 = new StudioCard("Virtual Camera (Auto-Start)")
             {
                 Dock = DockStyle.Bottom,
-                Height = Theme.S(82)
+                Height = Theme.S(114)
             };
             _vcamInfoLbl = new Label
             {
@@ -254,9 +256,20 @@ namespace AlapCamera
                 Font = Theme.UI(8.2f),
                 ForeColor = Theme.Muted,
                 Location = new Point(Theme.S(12), Theme.S(30)),
-                Size = new Size(cw - Theme.S(24), Theme.S(44))
+                Size = new Size(cw - Theme.S(24), Theme.S(42))
             };
             c4.Controls.Add(_vcamInfoLbl);
+
+            var uninstBtn = new FlatBtn("Uninstall AlapCamera")
+            {
+                Location = new Point(Theme.S(12), Theme.S(78)),
+                Size = new Size(cw - Theme.S(24), Theme.S(26)),
+                Font = Theme.UI(8f),
+                ForeColor = Theme.Danger
+            };
+            uninstBtn.Click += (s, e) => UninstallApp();
+            c4.Controls.Add(uninstBtn);
+
             sidebar.Controls.Add(c4);
 
             // Left Video Stage
@@ -508,9 +521,56 @@ namespace AlapCamera
             catch { }
         }
 
+        void UninstallApp()
+        {
+            var res = MessageBox.Show(this,
+                "Are you sure you want to uninstall AlapCamera?",
+                "Uninstall AlapCamera",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (res != DialogResult.Yes) return;
+
+            MessageBox.Show(this,
+                "Terima kasih sudah menggunakan AlapCamera!\n\nSampai jumpa di kamera yang lebih jernih lagi nanti! \uD83D\uDC4B",
+                "Selamat Tinggal!",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            _uninstalling = true;
+            try
+            {
+                if (_uiTimer != null) _uiTimer.Stop();
+                StopCamera();
+                _vcam.Dispose();
+                _proc.Dispose();
+                VirtualCam.UnregisterAll();
+
+                string exePath = Application.ExecutablePath;
+                string appDataDir = Path.GetDirectoryName(SettingsPath);
+                string progDataDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "AlapCamera");
+
+                string cmd = string.Format(
+                    "/c ping 127.0.0.1 -n 2 > nul & del /f /q \"{0}\" & if exist \"{1}\" rmdir /s /q \"{1}\" & if exist \"{2}\" rmdir /s /q \"{2}\"",
+                    exePath, appDataDir, progDataDir);
+
+                var psi = new ProcessStartInfo("cmd.exe", cmd)
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                Process.Start(psi);
+            }
+            catch { }
+
+            Application.Exit();
+        }
+
         void OnFormClosing(object sender, FormClosingEventArgs e)
         {
-            SaveSettings();
+            if (!_uninstalling) SaveSettings();
             if (_uiTimer != null) _uiTimer.Stop();
             StopCamera();
             _vcam.Dispose();

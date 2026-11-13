@@ -286,6 +286,61 @@ namespace AlapCamera
             if (_mutex != IntPtr.Zero) { CloseHandle(_mutex); _mutex = IntPtr.Zero; }
         }
 
+        public static void UnregisterAll()
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "AlapCamera", "driver");
+            string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            string reg64 = Path.Combine(winDir, "System32", "regsvr32.exe");
+            string reg32 = Path.Combine(winDir, "SysWOW64", "regsvr32.exe");
+
+            foreach (var pair in new[]
+            {
+                new[] { reg64, Path.Combine(dir, "AlapMfCam64.dll") },
+                new[] { reg64, Path.Combine(dir, "UnityCaptureFilter64.dll") },
+                new[] { reg32, Path.Combine(dir, "UnityCaptureFilter32.dll") }
+            })
+            {
+                try
+                {
+                    if (File.Exists(pair[0]) && File.Exists(pair[1]))
+                    {
+                        var psi = new ProcessStartInfo(pair[0], "/s /u \"" + pair[1] + "\"")
+                        {
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        using (var p = Process.Start(psi))
+                            if (p != null) p.WaitForExit(5000);
+                    }
+                }
+                catch { }
+            }
+
+            foreach (string sub in new[]
+            {
+                @"SOFTWARE\Classes\CLSID\" + MfVirtualCam.ClsidStr,
+                @"SOFTWARE\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
+                @"SOFTWARE\Classes\CLSID\" + UnityClsid,
+                @"SOFTWARE\WOW6432Node\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
+                @"SOFTWARE\WOW6432Node\Classes\CLSID\" + UnityClsid
+            })
+            {
+                try { Registry.LocalMachine.DeleteSubKeyTree(sub, false); } catch { }
+            }
+
+            foreach (string cu in new[]
+            {
+                @"Software\Classes\CLSID\" + MfVirtualCam.ClsidStr,
+                @"Software\Classes\CLSID\" + VideoCat + @"\Instance\" + UnityClsid,
+                @"Software\Classes\CLSID\" + UnityClsid
+            })
+            {
+                try { Registry.CurrentUser.DeleteSubKeyTree(cu, false); } catch { }
+            }
+        }
+
         public void Dispose() { Stop(); }
     }
 }

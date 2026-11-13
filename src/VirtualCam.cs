@@ -178,22 +178,15 @@ namespace AlapCamera
         {
             Stop();
 
-            if (MfVirtualCam.IsSupported() && _mf.Start(DeviceName))
-            {
-                BackendName = "MF VirtualCam (Streamlabs/OBS/Zoom)";
-                IsRunning = true;
-                return true;
-            }
-
             BackendName = "DirectShow";
             EnsureRegistered();
             _maxFrameBytes = maxWidth * maxHeight * 4;
             int totalBytes = Marshal.SizeOf(typeof(SharedMemHeader)) + _maxFrameBytes;
 
-            _mutex = CreateMutexA(IntPtr.Zero, false, "UnityCapture_Mutx0");
-            _wantEvent = CreateEventA(IntPtr.Zero, false, false, "UnityCapture_Want0");
-            _sentEvent = CreateEventA(IntPtr.Zero, false, false, "UnityCapture_Sent0");
-            _map = CreateFileMappingA(new IntPtr(-1), IntPtr.Zero, PAGE_READWRITE, 0, (uint)totalBytes, "UnityCapture_Data0");
+            _mutex = CreateMutexA(IntPtr.Zero, false, "UnityCapture_Mutx");
+            _wantEvent = CreateEventA(IntPtr.Zero, false, false, "UnityCapture_Want");
+            _sentEvent = CreateEventA(IntPtr.Zero, false, false, "UnityCapture_Sent");
+            _map = CreateFileMappingA(new IntPtr(-1), IntPtr.Zero, PAGE_READWRITE, 0, (uint)totalBytes, "UnityCapture_Data");
             if (_map == IntPtr.Zero) return false;
 
             _view = MapViewOfFile(_map, FILE_MAP_ALL_ACCESS, 0, 0, (UIntPtr)totalBytes);

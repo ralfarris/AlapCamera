@@ -32,7 +32,8 @@ namespace AlapCamera
         byte[] _prevBuf;
         byte[] _workBuf;
         byte[] _rawCopy;
-        int[] _mxLut;
+        int[] _mx0, _mx1;
+        float[] _mfx;
         int _mxLutW;
         readonly int[] _hist = new int[256];
 
@@ -77,7 +78,8 @@ namespace AlapCamera
                 if (_onnx.IsAvailable)
                 {
                     // Run AI inference every 3rd frame (10 Hz mask, full 30 FPS output) for low CPU usage
-                    if (_maskSmooth == null || (_segFrameIdx++ % 3) == 0)
+                    // Run AI inference every 2nd frame (15 Hz mask, full 30 FPS output) for smooth motion & low CPU
+                    if (_maskSmooth == null || (_segFrameIdx++ % 2) == 0)
                     {
                         if (_onnx.Infer(_workBuf, w, h, _aiMask))
                         {
@@ -94,7 +96,10 @@ namespace AlapCamera
                                     a = (a - 0.15f) / 0.70f;
                                     if (a < 0f) a = 0f;
                                     else if (a > 1f) a = 1f;
-                                    _maskSmooth[i] = 0.70f * a + 0.30f * _maskSmooth[i];
+                                    float prev = _maskSmooth[i];
+                                    float diff = a > prev ? a - prev : prev - a;
+                                    float k = diff > 0.25f ? 0.94f : 0.78f;
+                                    _maskSmooth[i] = prev + (a - prev) * k;
                                 }
                             }
                         }
@@ -387,34 +392,50 @@ namespace AlapCamera
             }
         }
 
-        int[] EnsureMxLut(int w)
+        void EnsureMxLuts(int w)
         {
-            if (_mxLut == null || _mxLutW != w)
+            if (_mx0 != null && _mxLutW == w) return;
+            _mx0 = new int[w];
+            _mx1 = new int[w];
+            _mfx = new float[w];
+            float scale = (Mw - 1f) / Math.Max(1, w - 1);
+            for (int x = 0; x < w; x++)
             {
-                _mxLut = new int[w];
-                for (int x = 0; x < w; x++) _mxLut[x] = (x * Mw) / w;
-                _mxLutW = w;
+                float fx = x * scale;
+                int x0 = (int)fx;
+                if (x0 >= Mw - 1) { x0 = Mw - 1; _mx0[x] = x0; _mx1[x] = x0; _mfx[x] = 0f; }
+                else { _mx0[x] = x0; _mx1[x] = x0 + 1; _mfx[x] = fx - x0; }
             }
-            return _mxLut;
+            _mxLutW = w;
         }
 
         unsafe void BlendSolidGreen(byte[] fg, byte[] dst, int w, int h)
         {
-            int[] mxLut = EnsureMxLut(w);
+            EnsureMxLuts(w);
+            float yScale = (Mh - 1f) / Math.Max(1, h - 1);
             fixed (byte* pF = fg)
             fixed (byte* pD = dst)
             fixed (float* pM = _maskSmooth)
-            fixed (int* pMx = mxLut)
+            fixed (int* pX0 = _mx0)
+            fixed (int* pX1 = _mx1)
+            fixed (float* pFx = _mfx)
             {
                 for (int y = 0; y < h; y++)
                 {
-                    int my = (y * Mh) / h;
+                    float fyFull = y * yScale;
+                    int y0 = (int)fyFull;
+                    int y1 = y0 >= Mh - 1 ? Mh - 1 : y0 + 1;
+                    float fy = fyFull - y0;
+                    float invFy = 1f - fy;
                     byte* fRow = pF + y * w * 3;
                     byte* dRow = pD + y * w * 3;
-                    float* mRow = pM + my * Mw;
+                    float* m0 = pM + y0 * Mw;
+                    float* m1 = pM + y1 * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[pMx[x]];
+                        int x0 = pX0[x], x1 = pX1[x];
+                        float fx = pFx[x], invFx = 1f - fx;
+                        float a = (m0[x0] * invFx + m0[x1] * fx) * invFy + (m1[x0] * invFx + m1[x1] * fx) * fy;
                         if (a > 0.96f)
                         {
                             dRow[0] = fRow[0]; dRow[1] = fRow[1]; dRow[2] = fRow[2];
@@ -439,22 +460,32 @@ namespace AlapCamera
 
         unsafe void BlendCheckerboard(byte[] fg, byte[] dst, int w, int h)
         {
-            int[] mxLut = EnsureMxLut(w);
+            EnsureMxLuts(w);
+            float yScale = (Mh - 1f) / Math.Max(1, h - 1);
             fixed (byte* pF = fg)
             fixed (byte* pD = dst)
             fixed (float* pM = _maskSmooth)
-            fixed (int* pMx = mxLut)
+            fixed (int* pX0 = _mx0)
+            fixed (int* pX1 = _mx1)
+            fixed (float* pFx = _mfx)
             {
                 for (int y = 0; y < h; y++)
                 {
-                    int my = (y * Mh) / h;
+                    float fyFull = y * yScale;
+                    int y0 = (int)fyFull;
+                    int y1 = y0 >= Mh - 1 ? Mh - 1 : y0 + 1;
+                    float fy = fyFull - y0;
+                    float invFy = 1f - fy;
                     int cy = (y >> 4) & 1;
                     byte* fRow = pF + y * w * 3;
                     byte* dRow = pD + y * w * 3;
-                    float* mRow = pM + my * Mw;
+                    float* m0 = pM + y0 * Mw;
+                    float* m1 = pM + y1 * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[pMx[x]];
+                        int x0 = pX0[x], x1 = pX1[x];
+                        float fx = pFx[x], invFx = 1f - fx;
+                        float a = (m0[x0] * invFx + m0[x1] * fx) * invFy + (m1[x0] * invFx + m1[x1] * fx) * fy;
                         byte bg = (byte)((((x >> 4) & 1) ^ cy) == 0 ? 44 : 30);
                         if (a > 0.96f)
                         {
@@ -480,21 +511,31 @@ namespace AlapCamera
 
         unsafe void BlendWithMask(byte[] fg, byte[] bg, int w, int h, bool unused)
         {
-            int[] mxLut = EnsureMxLut(w);
+            EnsureMxLuts(w);
+            float yScale = (Mh - 1f) / Math.Max(1, h - 1);
             fixed (byte* pF = fg)
             fixed (byte* pB = bg)
             fixed (float* pM = _maskSmooth)
-            fixed (int* pMx = mxLut)
+            fixed (int* pX0 = _mx0)
+            fixed (int* pX1 = _mx1)
+            fixed (float* pFx = _mfx)
             {
                 for (int y = 0; y < h; y++)
                 {
-                    int my = (y * Mh) / h;
+                    float fyFull = y * yScale;
+                    int y0 = (int)fyFull;
+                    int y1 = y0 >= Mh - 1 ? Mh - 1 : y0 + 1;
+                    float fy = fyFull - y0;
+                    float invFy = 1f - fy;
                     byte* fRow = pF + y * w * 3;
                     byte* bRow = pB + y * w * 3;
-                    float* mRow = pM + my * Mw;
+                    float* m0 = pM + y0 * Mw;
+                    float* m1 = pM + y1 * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[pMx[x]];
+                        int x0 = pX0[x], x1 = pX1[x];
+                        float fx = pFx[x], invFx = 1f - fx;
+                        float a = (m0[x0] * invFx + m0[x1] * fx) * invFy + (m1[x0] * invFx + m1[x1] * fx) * fy;
                         if (a > 0.96f)
                         {
                             bRow[0] = fRow[0]; bRow[1] = fRow[1]; bRow[2] = fRow[2];

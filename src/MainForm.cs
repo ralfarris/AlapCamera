@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.4.2";
+        const string AppVersion = "0.4.3";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -256,7 +256,7 @@ namespace AlapCamera
             y += c3.Height + Theme.S(10);
 
             // Card 4: Mic Booster (0% - 200%)
-            var cMic = new StudioCard("4. Mic Booster (0% - 200%)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(224)) };
+            var cMic = new StudioCard("4. Mic Booster (0% - 200%)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(230)) };
             _micSwitch = new ToggleSwitch("Mic Input Booster", _micEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
@@ -330,6 +330,7 @@ namespace AlapCamera
                 TickFrequency = 25,
                 Value = Math.Max(0, Math.Min(200, _micVolPercent)),
                 BackColor = Theme.Card,
+                AutoSize = false,
                 Location = new Point(Theme.S(8), Theme.S(138)),
                 Size = new Size(cw - Theme.S(16), Theme.S(34))
             };
@@ -346,7 +347,7 @@ namespace AlapCamera
                 Text = "Nonaktif (0% CPU) - nyalakan jika mic terasa kecil.",
                 Font = Theme.UI(7.8f),
                 ForeColor = Theme.Muted,
-                Location = new Point(Theme.S(12), Theme.S(176)),
+                Location = new Point(Theme.S(12), Theme.S(180)),
                 Size = new Size(cw - Theme.S(24), Theme.S(38))
             };
             cMic.Controls.Add(_micStatusLbl);

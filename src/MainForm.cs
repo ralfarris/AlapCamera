@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.4.3";
+        const string AppVersion = "0.4.4";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -539,7 +539,7 @@ namespace AlapCamera
             _audio.VolumePercent = _micVolTrack != null ? _micVolTrack.Value : _micVolPercent;
             if (_audio.Start(inDev.Id, outDev.Id))
             {
-                _micStatusLbl.Text = "Aktif -> Pilih 'Virtual Mic (AudioRelay)' / 'CABLE Output' di Streamlabs.";
+                _micStatusLbl.Text = "Aktif -> Di Streamlabs pilih 'CABLE Output' (butuh VB-Cable).";
                 _micStatusLbl.ForeColor = Theme.Green;
             }
             else

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace AlapCamera
@@ -21,7 +22,10 @@ namespace AlapCamera
         const int BufferBytes = (SampleRate * Channels * (BitsPerSample / 8) * BufferMs) / 1000;
         const int NumBuffers = 4;
 
-        const uint CALLBACK_FUNCTION = 0x00030000;
+        const uint CALLBACK_NULL = 0x00000000;
+        const uint CALLBACK_EVENT = 0x00050000;
+        const uint WHDR_DONE = 0x00000001;
+        const uint WHDR_INQUEUE = 0x00000010;
         const uint WIM_DATA = 0x3C0;
         const uint WOM_DONE = 0x3BD;
         const uint DRV_QUERYFUNCTIONINSTANCEID = 0x0811;
@@ -83,7 +87,7 @@ namespace AlapCamera
 
         [DllImport("winmm.dll")] static extern uint waveInGetNumDevs();
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)] static extern int waveInGetDevCapsW(UIntPtr uDeviceID, out WAVEINCAPSW pwic, uint cbwic);
-        [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr phwi, uint uDeviceID, ref WAVEFORMATEX pwfx, WaveCallback dwCallback, IntPtr dwInstance, uint fdwOpen);
+        [DllImport("winmm.dll")] static extern int waveInOpen(out IntPtr phwi, uint uDeviceID, ref WAVEFORMATEX pwfx, IntPtr dwCallback, IntPtr dwInstance, uint fdwOpen);
         [DllImport("winmm.dll")] static extern int waveInPrepareHeader(IntPtr hwi, IntPtr pwh, uint cbwh);
         [DllImport("winmm.dll")] static extern int waveInUnprepareHeader(IntPtr hwi, IntPtr pwh, uint cbwh);
         [DllImport("winmm.dll")] static extern int waveInAddBuffer(IntPtr hwi, IntPtr pwh, uint cbwh);
@@ -94,7 +98,7 @@ namespace AlapCamera
 
         [DllImport("winmm.dll")] static extern uint waveOutGetNumDevs();
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)] static extern int waveOutGetDevCapsW(UIntPtr uDeviceID, out WAVEOUTCAPSW pwoc, uint cbwoc);
-        [DllImport("winmm.dll")] static extern int waveOutOpen(out IntPtr phwo, uint uDeviceID, ref WAVEFORMATEX pwfx, WaveCallback dwCallback, IntPtr dwInstance, uint fdwOpen);
+        [DllImport("winmm.dll")] static extern int waveOutOpen(out IntPtr phwo, uint uDeviceID, ref WAVEFORMATEX pwfx, IntPtr dwCallback, IntPtr dwInstance, uint fdwOpen);
         [DllImport("winmm.dll")] static extern int waveOutPrepareHeader(IntPtr hwo, IntPtr pwh, uint cbwh);
         [DllImport("winmm.dll")] static extern int waveOutUnprepareHeader(IntPtr hwo, IntPtr pwh, uint cbwh);
         [DllImport("winmm.dll")] static extern int waveOutWrite(IntPtr hwo, IntPtr pwh, uint cbwh);
@@ -109,8 +113,9 @@ namespace AlapCamera
         readonly object _lock = new object();
         IntPtr _hIn;
         IntPtr _hOut;
-        WaveCallback _inCb;
-        WaveCallback _outCb;
+        AutoResetEvent _inEvent;
+        Thread _worker;
+
         IntPtr[] _inHdrs;
         IntPtr[] _inBufs;
         IntPtr[] _outHdrs;
@@ -216,10 +221,7 @@ namespace AlapCamera
                         cbSize = 0
                     };
 
-                    _inCb = OnWaveIn;
-                    _outCb = OnWaveOut;
-
-                    int rc = waveOutOpen(out _hOut, (uint)outDevId, ref fmt, _outCb, IntPtr.Zero, CALLBACK_FUNCTION);
+                    int rc = waveOutOpen(out _hOut, (uint)outDevId, ref fmt, IntPtr.Zero, IntPtr.Zero, CALLBACK_NULL);
                     if (rc != 0 || _hOut == IntPtr.Zero)
                     {
                         LastError = "waveOutOpen error " + rc;
@@ -227,7 +229,9 @@ namespace AlapCamera
                         return false;
                     }
 
-                    rc = waveInOpen(out _hIn, (uint)inDevId, ref fmt, _inCb, IntPtr.Zero, CALLBACK_FUNCTION);
+                    _inEvent = new AutoResetEvent(false);
+                    IntPtr hEvt = _inEvent.SafeWaitHandle.DangerousGetHandle();
+                    rc = waveInOpen(out _hIn, (uint)inDevId, ref fmt, hEvt, IntPtr.Zero, CALLBACK_EVENT);
                     if (rc != 0 || _hIn == IntPtr.Zero)
                     {
                         LastError = "waveInOpen error " + rc;
@@ -258,8 +262,10 @@ namespace AlapCamera
                     }
 
                     _outIdx = 0;
-                    waveInStart(_hIn);
                     IsRunning = true;
+                    _worker = new Thread(AudioLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "AlapAudio" };
+                    _worker.Start();
+                    waveInStart(_hIn);
                     return true;
                 }
                 catch (Exception ex)
@@ -271,61 +277,79 @@ namespace AlapCamera
             }
         }
 
-        unsafe void OnWaveIn(IntPtr hwi, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2)
+        unsafe void AudioLoop()
         {
-            if (uMsg != WIM_DATA || _stopping || !IsRunning) return;
-            try
+            while (!_stopping && IsRunning)
             {
-                var hdr = (WAVEHDR*)dwParam1;
-                int bytes = (int)hdr->dwBytesRecorded;
-                if (bytes > 0 && _hOut != IntPtr.Zero && _outHdrs != null)
+                try
                 {
-                    int idx = _outIdx++ % NumBuffers;
-                    var outHdr = (WAVEHDR*)_outHdrs[idx];
-                    short* src = (short*)hdr->lpData;
-                    short* dst = (short*)outHdr->lpData;
-                    int samples = Math.Min(bytes, BufferBytes) >> 1;
-                    float gain = VolumePercent / 100.0f;
+                    var evt = _inEvent;
+                    if (evt == null) break;
+                    evt.WaitOne(100);
+                    if (_stopping || !IsRunning || _inHdrs == null || _outHdrs == null) break;
 
-                    for (int i = 0; i < samples; i++)
+                    for (int b = 0; b < NumBuffers; b++)
                     {
-                        float s = (src[i] / 32768.0f) * gain;
-                        // Soft-clipping limiter above 0.85 so 100-200% boost stays clean without harsh crackle
-                        if (s > 0.85f)
+                        if (_stopping || _hIn == IntPtr.Zero || _hOut == IntPtr.Zero) break;
+                        var inHdr = (WAVEHDR*)_inHdrs[b];
+                        if ((inHdr->dwFlags & WHDR_DONE) == 0) continue;
+
+                        int bytes = (int)inHdr->dwBytesRecorded;
+                        if (bytes > 0)
                         {
-                            float ex = s - 0.85f;
-                            s = 0.85f + 0.14f * (ex / (1.0f + ex * 3.0f));
+                            int idx = _outIdx++ % NumBuffers;
+                            var outHdr = (WAVEHDR*)_outHdrs[idx];
+                            if ((outHdr->dwFlags & WHDR_INQUEUE) == 0)
+                            {
+                                short* src = (short*)inHdr->lpData;
+                                short* dst = (short*)outHdr->lpData;
+                                int samples = Math.Min(bytes, BufferBytes) >> 1;
+                                float gain = VolumePercent / 100.0f;
+
+                                for (int i = 0; i < samples; i++)
+                                {
+                                    float s = (src[i] / 32768.0f) * gain;
+                                    if (s > 0.85f)
+                                    {
+                                        float ex = s - 0.85f;
+                                        s = 0.85f + 0.14f * (ex / (1.0f + ex * 3.0f));
+                                    }
+                                    else if (s < -0.85f)
+                                    {
+                                        float ex = -0.85f - s;
+                                        s = -(0.85f + 0.14f * (ex / (1.0f + ex * 3.0f)));
+                                    }
+                                    int v = (int)(s * 32767.0f);
+                                    if (v > 32767) v = 32767;
+                                    else if (v < -32768) v = -32768;
+                                    dst[i] = (short)v;
+                                }
+
+                                outHdr->dwBufferLength = (uint)(samples << 1);
+                                waveOutWrite(_hOut, _outHdrs[idx], (uint)sizeof(WAVEHDR));
+                            }
                         }
-                        else if (s < -0.85f)
-                        {
-                            float ex = -0.85f - s;
-                            s = -(0.85f + 0.14f * (ex / (1.0f + ex * 3.0f)));
-                        }
-                        int v = (int)(s * 32767.0f);
-                        if (v > 32767) v = 32767;
-                        else if (v < -32768) v = -32768;
-                        dst[i] = (short)v;
+
+                        if (!_stopping && _hIn != IntPtr.Zero)
+                            waveInAddBuffer(_hIn, _inHdrs[b], (uint)sizeof(WAVEHDR));
                     }
-
-                    outHdr->dwBufferLength = (uint)(samples << 1);
-                    waveOutWrite(_hOut, _outHdrs[idx], (uint)sizeof(WAVEHDR));
                 }
-
-                if (!_stopping && _hIn != IntPtr.Zero)
-                    waveInAddBuffer(_hIn, dwParam1, (uint)sizeof(WAVEHDR));
+                catch { }
             }
-            catch { }
-        }
-
-        void OnWaveOut(IntPtr hwo, uint uMsg, IntPtr dwInstance, IntPtr dwParam1, IntPtr dwParam2)
-        {
-            // Nothing needed; buffers are recycled in ring
         }
 
         public void Stop()
         {
             _stopping = true;
             IsRunning = false;
+            try { if (_inEvent != null) _inEvent.Set(); } catch { }
+            var w = _worker;
+            _worker = null;
+            if (w != null && w != Thread.CurrentThread)
+            {
+                try { w.Join(300); } catch { }
+            }
+
             lock (_lock)
             {
                 int hdrSize = Marshal.SizeOf(typeof(WAVEHDR));
@@ -369,6 +393,12 @@ namespace AlapCamera
                     _hOut = IntPtr.Zero;
                     _outHdrs = null;
                     _outBufs = null;
+                }
+
+                if (_inEvent != null)
+                {
+                    try { _inEvent.Close(); } catch { }
+                    _inEvent = null;
                 }
             }
         }

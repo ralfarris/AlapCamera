@@ -32,6 +32,8 @@ namespace AlapCamera
         byte[] _prevBuf;
         byte[] _workBuf;
         byte[] _rawCopy;
+        int[] _mxLut;
+        int _mxLutW;
         readonly int[] _hist = new int[256];
 
         public string SegStatus { get { return _onnx.StatusText; } }
@@ -385,11 +387,24 @@ namespace AlapCamera
             }
         }
 
+        int[] EnsureMxLut(int w)
+        {
+            if (_mxLut == null || _mxLutW != w)
+            {
+                _mxLut = new int[w];
+                for (int x = 0; x < w; x++) _mxLut[x] = (x * Mw) / w;
+                _mxLutW = w;
+            }
+            return _mxLut;
+        }
+
         unsafe void BlendSolidGreen(byte[] fg, byte[] dst, int w, int h)
         {
+            int[] mxLut = EnsureMxLut(w);
             fixed (byte* pF = fg)
             fixed (byte* pD = dst)
             fixed (float* pM = _maskSmooth)
+            fixed (int* pMx = mxLut)
             {
                 for (int y = 0; y < h; y++)
                 {
@@ -399,7 +414,7 @@ namespace AlapCamera
                     float* mRow = pM + my * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[(x * Mw) / w];
+                        float a = mRow[pMx[x]];
                         if (a > 0.96f)
                         {
                             dRow[0] = fRow[0]; dRow[1] = fRow[1]; dRow[2] = fRow[2];
@@ -424,9 +439,11 @@ namespace AlapCamera
 
         unsafe void BlendCheckerboard(byte[] fg, byte[] dst, int w, int h)
         {
+            int[] mxLut = EnsureMxLut(w);
             fixed (byte* pF = fg)
             fixed (byte* pD = dst)
             fixed (float* pM = _maskSmooth)
+            fixed (int* pMx = mxLut)
             {
                 for (int y = 0; y < h; y++)
                 {
@@ -437,7 +454,7 @@ namespace AlapCamera
                     float* mRow = pM + my * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[(x * Mw) / w];
+                        float a = mRow[pMx[x]];
                         byte bg = (byte)((((x >> 4) & 1) ^ cy) == 0 ? 44 : 30);
                         if (a > 0.96f)
                         {
@@ -463,9 +480,11 @@ namespace AlapCamera
 
         unsafe void BlendWithMask(byte[] fg, byte[] bg, int w, int h, bool unused)
         {
+            int[] mxLut = EnsureMxLut(w);
             fixed (byte* pF = fg)
             fixed (byte* pB = bg)
             fixed (float* pM = _maskSmooth)
+            fixed (int* pMx = mxLut)
             {
                 for (int y = 0; y < h; y++)
                 {
@@ -475,7 +494,7 @@ namespace AlapCamera
                     float* mRow = pM + my * Mw;
                     for (int x = 0; x < w; x++)
                     {
-                        float a = mRow[(x * Mw) / w];
+                        float a = mRow[pMx[x]];
                         if (a > 0.96f)
                         {
                             bRow[0] = fRow[0]; bRow[1] = fRow[1]; bRow[2] = fRow[2];

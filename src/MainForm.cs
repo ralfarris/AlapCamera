@@ -41,7 +41,9 @@ namespace AlapCamera
         bool _audioUiSync;
 
         // UI
-        Panel _stage;
+        Panel _stage, _cardsHost, _cardsInner;
+        int _cardsScrollY;
+        IMessageFilter _wheelFilter;
         Label _liveBadge, _statusLbl, _vcamInfoLbl, _micVolLbl, _micStatusLbl;
         ComboBox _camCombo, _micInCombo, _micOutCombo;
         ToggleSwitch _enhSwitch, _bgSwitch, _splitSwitch, _micSwitch;
@@ -166,12 +168,7 @@ namespace AlapCamera
             };
             body.Controls.Add(sidebar);
 
-            var cardsScroll = new Panel
-            {
-                Dock = DockStyle.Fill,
-                AutoScroll = true,
-                BackColor = Theme.Bg
-            };
+            var cardsHost = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg }; _cardsHost = cardsHost; var cardsScroll = new Panel { Location = new Point(0, 0), Width = Theme.S(306), BackColor = Theme.Bg }; _cardsInner = cardsScroll; cardsHost.Controls.Add(cardsScroll); cardsHost.SizeChanged += (s, e) => ScrollCardsBy(0);
 
             int y = 0;
             int cw = Theme.S(306);
@@ -353,6 +350,7 @@ namespace AlapCamera
             cMic.Controls.Add(_micStatusLbl);
 
             cardsScroll.Controls.Add(cMic);
+            cardsScroll.Height = y + cMic.Height + Theme.S(4);
 
             // Card 5: Virtual Camera (Docked Bottom)
             var c4 = new StudioCard("Virtual Camera (Auto-Start)")
@@ -381,8 +379,11 @@ namespace AlapCamera
             c4.Controls.Add(uninstBtn);
 
             sidebar.Controls.Add(c4);
-            sidebar.Controls.Add(cardsScroll);
-            cardsScroll.BringToFront();
+            sidebar.Controls.Add(cardsHost);
+            cardsHost.BringToFront();
+            _wheelFilter = new WheelScrollFilter(this);
+            Application.AddMessageFilter(_wheelFilter);
+
 
             // Left Video Stage
             var stageWrap = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(8, 9, 13) };
@@ -761,6 +762,7 @@ namespace AlapCamera
 
         void OnFormClosing(object sender, FormClosingEventArgs e)
         {
+            if (_wheelFilter != null) { Application.RemoveMessageFilter(_wheelFilter); _wheelFilter = null; }
             if (!_uninstalling) SaveSettings();
             if (_uiTimer != null) _uiTimer.Stop();
             StopCamera();
@@ -768,6 +770,40 @@ namespace AlapCamera
             _vcam.Dispose();
             _proc.Dispose();
             if (_bmp != null) _bmp.Dispose();
+        }
+
+        void ScrollCardsBy(int deltaPx)
+        {
+            if (_cardsHost == null || _cardsInner == null) return;
+            int minTop = Math.Min(0, _cardsHost.ClientSize.Height - _cardsInner.Height);
+            _cardsScrollY = Math.Max(minTop, Math.Min(0, _cardsScrollY + deltaPx));
+            if (_cardsInner.Top != _cardsScrollY) _cardsInner.Top = _cardsScrollY;
+        }
+
+        sealed class WheelScrollFilter : IMessageFilter
+        {
+            readonly MainForm _form;
+            public WheelScrollFilter(MainForm form) { _form = form; }
+
+            public bool PreFilterMessage(ref Message m)
+            {
+                if (m.Msg != 0x020A || _form.IsDisposed || !_form.Visible) return false;
+                if (_form._cardsHost == null || (_form._camCombo != null && _form._camCombo.DroppedDown)) return false;
+                if ((_form._micInCombo != null && _form._micInCombo.DroppedDown) || (_form._micOutCombo != null && _form._micOutCombo.DroppedDown)) return false;
+
+                Point pt = _form._cardsHost.PointToClient(Cursor.Position);
+                if (!_form._cardsHost.ClientRectangle.Contains(pt)) return false;
+
+                if (_form._micVolTrack != null)
+                {
+                    Point tPt = _form._micVolTrack.PointToClient(Cursor.Position);
+                    if (_form._micVolTrack.ClientRectangle.Contains(tPt)) return false;
+                }
+
+                int delta = (short)((long)m.WParam >> 16);
+                _form.ScrollCardsBy(delta > 0 ? Theme.S(36) : -Theme.S(36));
+                return true;
+            }
         }
 
         sealed class StagePanel : Panel

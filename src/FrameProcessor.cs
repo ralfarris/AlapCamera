@@ -29,8 +29,10 @@ namespace AlapCamera
         float[] _maskSmooth; // 256*256 smoothed alpha [0..1]
         byte[] _smallRgb;    // 256*256*3
         byte[] _blurBuf;
+        byte[] _prevBuf;
         byte[] _workBuf;
         byte[] _rawCopy;
+        readonly int[] _hist = new int[256];
 
         public string SegStatus { get { return _onnx.StatusText; } }
 
@@ -51,7 +53,7 @@ namespace AlapCamera
             _maskSmooth = null;
         }
 
-        public unsafe void Process(byte[] bgr, int w, int h, out byte[] outVcam, out byte[] outPreview, bool splitCompare)
+        public unsafe void Process(byte[] bgr, int w, int h, out byte[] outVcam, out byte[] outPreview, bool splitCompare, bool needPreview = true)
         {
             int len = w * h * 3;
             if (_workBuf == null || _workBuf.Length != len) _workBuf = new byte[len];
@@ -72,8 +74,8 @@ namespace AlapCamera
             {
                 if (_onnx.IsAvailable)
                 {
-                    // Run AI inference every 2nd frame (15 Hz mask, full 30 FPS output) to cut CPU ~50%
-                    if (_maskSmooth == null || (_segFrameIdx++ & 1) == 0)
+                    // Run AI inference every 3rd frame (10 Hz mask, full 30 FPS output) for low CPU usage
+                    if (_maskSmooth == null || (_segFrameIdx++ % 3) == 0)
                     {
                         if (_onnx.Infer(_workBuf, w, h, _aiMask))
                         {
@@ -101,7 +103,7 @@ namespace AlapCamera
                     if (_bgRef == null) InitBackground(_workBuf, w, h);
                     UpdateMask(_workBuf, w, h);
                 }
-                ApplyBackground(_workBuf, w, h, out outVcam, out outPreview);
+                ApplyBackground(_workBuf, w, h, out outVcam, out outPreview, needPreview);
             }
             else
             {
@@ -109,13 +111,13 @@ namespace AlapCamera
                 outPreview = _workBuf;
             }
 
-            if (splitCompare)
+            if (splitCompare && needPreview)
             {
                 if (outPreview == outVcam)
                 {
-                    var copy = new byte[len];
-                    Buffer.BlockCopy(outPreview, 0, copy, 0, len);
-                    outPreview = copy;
+                    if (_prevBuf == null || _prevBuf.Length != len) _prevBuf = new byte[len];
+                    Buffer.BlockCopy(outPreview, 0, _prevBuf, 0, len);
+                    outPreview = _prevBuf;
                 }
                 ApplySplit(_rawCopy, outPreview, w, h);
             }
@@ -151,7 +153,8 @@ namespace AlapCamera
                 // Fast portrait-zone metering on 8x subsampled grid
                 int y0 = (int)(h * 0.15f), y1 = (int)(h * 0.85f);
                 int x0 = (int)(w * 0.20f), x1 = (int)(w * 0.80f);
-                int[] hist = new int[256];
+                int[] hist = _hist;
+                Array.Clear(hist, 0, 256);
                 long sumB = 0, sumG = 0, sumR = 0;
                 int count = 0;
 
@@ -351,7 +354,7 @@ namespace AlapCamera
             }
         }
 
-        unsafe void ApplyBackground(byte[] fg, int w, int h, out byte[] outVcam, out byte[] outPreview)
+        unsafe void ApplyBackground(byte[] fg, int w, int h, out byte[] outVcam, out byte[] outPreview, bool needPreview)
         {
             int len = w * h * 3;
             if (Mode == BgMode.Blur)
@@ -370,11 +373,11 @@ namespace AlapCamera
             BlendSolidGreen(fg, _blurBuf, w, h);
             outVcam = _blurBuf;
 
-            if (Mode == BgMode.Cutout)
+            if (Mode == BgMode.Cutout && needPreview)
             {
-                var prev = new byte[len];
-                BlendCheckerboard(fg, prev, w, h);
-                outPreview = prev;
+                if (_prevBuf == null || _prevBuf.Length != len) _prevBuf = new byte[len];
+                BlendCheckerboard(fg, _prevBuf, w, h);
+                outPreview = _prevBuf;
             }
             else
             {

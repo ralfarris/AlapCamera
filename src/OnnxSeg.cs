@@ -87,6 +87,8 @@ namespace AlapCamera
         private IntPtr[] _outNames;
         private IntPtr[] _inVals;
         private IntPtr[] _outVals = new IntPtr[1];
+        private readonly int[] _sxLut = new int[ModelWidth];
+        private int _lutW;
 
         private readonly object _lock = new object();
         private bool _disposed;
@@ -207,7 +209,7 @@ namespace AlapCamera
             }
 
             CheckStatus(createOpts(out _opts));
-            CheckStatus(setThreads(_opts, 2));
+            CheckStatus(setThreads(_opts, 1));
 
             IntPtr modelPtr = Marshal.AllocHGlobal(modelBytes.Length);
             try
@@ -243,7 +245,7 @@ namespace AlapCamera
             StatusText = "AI Selfie Segmentation (ORT 1.17)";
         }
 
-        public bool Infer(byte[] bgr, int w, int h, float[] outMask256)
+        public unsafe bool Infer(byte[] bgr, int w, int h, float[] outMask256)
         {
             if (!IsAvailable || _disposed || outMask256 == null || outMask256.Length < ModelWidth * ModelHeight)
                 return false;
@@ -252,23 +254,36 @@ namespace AlapCamera
             {
                 if (!IsAvailable || _disposed) return false;
 
-                int plane = ModelWidth * ModelHeight;
+                if (_lutW != w)
+                {
+                    _lutW = w;
+                    for (int x = 0; x < ModelWidth; x++)
+                        _sxLut[x] = ((x * w) / ModelWidth) * 3;
+                }
+
+                const int plane = ModelWidth * ModelHeight;
+                const int plane2 = plane * 2;
                 const float inv255 = 1.0f / 255.0f;
                 int stride = w * 3;
 
-                for (int y = 0; y < ModelHeight; y++)
+                fixed (byte* pBgr = bgr)
+                fixed (float* pNchw = _nchw)
+                fixed (int* pLut = _sxLut)
                 {
-                    int sy = (y * h) / ModelHeight;
-                    int rowOff = sy * stride;
-                    int dstRow = y * ModelWidth;
-                    for (int x = 0; x < ModelWidth; x++)
+                    for (int y = 0; y < ModelHeight; y++)
                     {
-                        int sx = (x * w) / ModelWidth;
-                        int px = rowOff + sx * 3;
-                        int idx = dstRow + x;
-                        _nchw[idx] = bgr[px + 2] * inv255;              // R
-                        _nchw[plane + idx] = bgr[px + 1] * inv255;      // G
-                        _nchw[plane * 2 + idx] = bgr[px] * inv255;      // B
+                        byte* sRow = pBgr + ((y * h) / ModelHeight) * stride;
+                        int dstRow = y * ModelWidth;
+                        float* dR = pNchw + dstRow;
+                        float* dG = pNchw + plane + dstRow;
+                        float* dB = pNchw + plane2 + dstRow;
+                        for (int x = 0; x < ModelWidth; x++)
+                        {
+                            byte* px = sRow + pLut[x];
+                            dR[x] = px[2] * inv255;
+                            dG[x] = px[1] * inv255;
+                            dB[x] = px[0] * inv255;
+                        }
                     }
                 }
 

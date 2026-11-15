@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.9";
+        const string AppVersion = "0.3.10";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -24,6 +24,7 @@ namespace AlapCamera
         int _previewW, _previewH;
         long _frameSeq, _shownSeq = -1;
         Bitmap _bmp;
+        volatile bool _minimized;
         bool _uninstalling;
         bool _isBusy;
         string _busyCamName = "";
@@ -68,6 +69,7 @@ namespace AlapCamera
                 UpdateVcamBadge();
                 RefreshCameras();
             };
+            Resize += (s, e) => _minimized = (WindowState == FormWindowState.Minimized);
             FormClosing += OnFormClosing;
         }
 
@@ -372,19 +374,23 @@ namespace AlapCamera
         void OnCameraFrame(byte[] bgr24, int w, int h)
         {
             _isBusy = false;
+            bool needPrev = !_minimized;
             byte[] outVcam, outPrev;
-            _proc.Process(bgr24, w, h, out outVcam, out outPrev, _splitSwitch.Checked);
+            _proc.Process(bgr24, w, h, out outVcam, out outPrev, _splitSwitch.Checked, needPrev);
 
             _vcam.SendBgr24(outVcam, w, h, _proc.BgEnabled && _proc.Mode != BgMode.Blur);
 
-            lock (_previewLock)
+            if (needPrev)
             {
-                if (_previewBytes == null || _previewBytes.Length != outPrev.Length)
-                    _previewBytes = new byte[outPrev.Length];
-                Buffer.BlockCopy(outPrev, 0, _previewBytes, 0, outPrev.Length);
-                _previewW = w;
-                _previewH = h;
-                _frameSeq++;
+                lock (_previewLock)
+                {
+                    if (_previewBytes == null || _previewBytes.Length != outPrev.Length)
+                        _previewBytes = new byte[outPrev.Length];
+                    Buffer.BlockCopy(outPrev, 0, _previewBytes, 0, outPrev.Length);
+                    _previewW = w;
+                    _previewH = h;
+                    _frameSeq++;
+                }
             }
 
             long now = Environment.TickCount;

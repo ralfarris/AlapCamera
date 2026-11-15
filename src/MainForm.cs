@@ -282,7 +282,8 @@ namespace AlapCamera
                 FlatStyle = FlatStyle.Flat,
                 Font = Theme.UI(8.5f),
                 Location = new Point(Theme.S(82), Theme.S(60)),
-                Width = cw - Theme.S(94)
+                Width = cw - Theme.S(94),
+                DropDownWidth = Theme.S(340)
             };
             _micInCombo.SelectedIndexChanged += (s, e) => { if (!_audioUiSync && _micSwitch.Checked) ApplyAudioBooster(); };
             cMic.Controls.Add(_micInCombo);
@@ -304,7 +305,8 @@ namespace AlapCamera
                 FlatStyle = FlatStyle.Flat,
                 Font = Theme.UI(8.5f),
                 Location = new Point(Theme.S(82), Theme.S(90)),
-                Width = cw - Theme.S(94)
+                Width = cw - Theme.S(94),
+                DropDownWidth = Theme.S(340)
             };
             _micOutCombo.SelectedIndexChanged += (s, e) => { if (!_audioUiSync && _micSwitch.Checked) ApplyAudioBooster(); };
             cMic.Controls.Add(_micOutCombo);

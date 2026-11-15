@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace AlapCamera
 {
@@ -23,6 +24,8 @@ namespace AlapCamera
         const uint CALLBACK_FUNCTION = 0x00030000;
         const uint WIM_DATA = 0x3C0;
         const uint WOM_DONE = 0x3BD;
+        const uint DRV_QUERYFUNCTIONINSTANCEID = 0x0811;
+        const uint DRV_QUERYFUNCTIONINSTANCEIDSIZE = 0x0812;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         struct WAVEINCAPSW
@@ -87,6 +90,7 @@ namespace AlapCamera
         [DllImport("winmm.dll")] static extern int waveInStart(IntPtr hwi);
         [DllImport("winmm.dll")] static extern int waveInReset(IntPtr hwi);
         [DllImport("winmm.dll")] static extern int waveInClose(IntPtr hwi);
+        [DllImport("winmm.dll")] static extern int waveInMessage(IntPtr hwi, uint uMsg, IntPtr dw1, IntPtr dw2);
 
         [DllImport("winmm.dll")] static extern uint waveOutGetNumDevs();
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)] static extern int waveOutGetDevCapsW(UIntPtr uDeviceID, out WAVEOUTCAPSW pwoc, uint cbwoc);
@@ -96,6 +100,7 @@ namespace AlapCamera
         [DllImport("winmm.dll")] static extern int waveOutWrite(IntPtr hwo, IntPtr pwh, uint cbwh);
         [DllImport("winmm.dll")] static extern int waveOutReset(IntPtr hwo);
         [DllImport("winmm.dll")] static extern int waveOutClose(IntPtr hwo);
+        [DllImport("winmm.dll")] static extern int waveOutMessage(IntPtr hwo, uint uMsg, IntPtr dw1, IntPtr dw2);
 
         public volatile int VolumePercent = 100; // 0..200
         public bool IsRunning { get; private set; }
@@ -121,7 +126,7 @@ namespace AlapCamera
             {
                 WAVEINCAPSW caps;
                 if (waveInGetDevCapsW((UIntPtr)i, out caps, (uint)Marshal.SizeOf(typeof(WAVEINCAPSW))) == 0)
-                    list.Add(new AudioDeviceInfo { Id = (int)i, Name = caps.szPname });
+                    list.Add(new AudioDeviceInfo { Id = (int)i, Name = GetFullDeviceName(i, true, caps.szPname) });
             }
             return list;
         }
@@ -134,9 +139,61 @@ namespace AlapCamera
             {
                 WAVEOUTCAPSW caps;
                 if (waveOutGetDevCapsW((UIntPtr)i, out caps, (uint)Marshal.SizeOf(typeof(WAVEOUTCAPSW))) == 0)
-                    list.Add(new AudioDeviceInfo { Id = (int)i, Name = caps.szPname });
+                    list.Add(new AudioDeviceInfo { Id = (int)i, Name = GetFullDeviceName(i, false, caps.szPname) });
             }
             return list;
+        }
+
+        static string GetFullDeviceName(uint devId, bool isInput, string fallback)
+        {
+            try
+            {
+                IntPtr pSize = Marshal.AllocHGlobal(4);
+                try
+                {
+                    Marshal.WriteInt32(pSize, 0);
+                    int rc = isInput
+                        ? waveInMessage((IntPtr)devId, DRV_QUERYFUNCTIONINSTANCEIDSIZE, pSize, IntPtr.Zero)
+                        : waveOutMessage((IntPtr)devId, DRV_QUERYFUNCTIONINSTANCEIDSIZE, pSize, IntPtr.Zero);
+                    int bytes = Marshal.ReadInt32(pSize);
+                    if (rc == 0 && bytes > 4 && bytes < 1024)
+                    {
+                        IntPtr pStr = Marshal.AllocHGlobal(bytes);
+                        try
+                        {
+                            rc = isInput
+                                ? waveInMessage((IntPtr)devId, DRV_QUERYFUNCTIONINSTANCEID, pStr, (IntPtr)bytes)
+                                : waveOutMessage((IntPtr)devId, DRV_QUERYFUNCTIONINSTANCEID, pStr, (IntPtr)bytes);
+                            if (rc == 0)
+                            {
+                                string endpointId = Marshal.PtrToStringUni(pStr) ?? "";
+                                int dot = endpointId.LastIndexOf('.');
+                                string guid = dot >= 0 ? endpointId.Substring(dot + 1) : endpointId;
+                                if (!string.IsNullOrEmpty(guid))
+                                {
+                                    string sub = @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\" + (isInput ? "Capture" : "Render") + "\\" + guid + @"\Properties";
+                                    using (var k = Registry.LocalMachine.OpenSubKey(sub))
+                                    {
+                                        if (k != null)
+                                        {
+                                            string devDesc = k.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2") as string;
+                                            string iface = (k.GetValue("{b3f8fa53-0004-438e-9003-51a46e139bfc},6") as string)
+                                                ?? (k.GetValue("{026e516e-b814-414b-83cd-856d6fef4822},2") as string);
+                                            if (!string.IsNullOrEmpty(devDesc) && !string.IsNullOrEmpty(iface))
+                                                return devDesc + " (" + iface + ")";
+                                            if (!string.IsNullOrEmpty(devDesc)) return devDesc;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        finally { Marshal.FreeHGlobal(pStr); }
+                    }
+                }
+                finally { Marshal.FreeHGlobal(pSize); }
+            }
+            catch { }
+            return fallback;
         }
 
         public bool Start(int inDevId, int outDevId)

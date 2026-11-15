@@ -12,12 +12,15 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.3.10";
+        const string AppVersion = "0.4.0";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
+        readonly AudioBooster _audio = new AudioBooster();
         CameraCapture _cap;
         List<CameraDevice> _devices = new List<CameraDevice>();
+        List<AudioDeviceInfo> _micInputs = new List<AudioDeviceInfo>();
+        List<AudioDeviceInfo> _micOutputs = new List<AudioDeviceInfo>();
 
         readonly object _previewLock = new object();
         byte[] _previewBytes;
@@ -31,12 +34,18 @@ namespace AlapCamera
         double _fps;
         long _lastFrameMs;
         string _preferredCam = "";
+        string _preferredMicIn = "";
+        string _preferredMicOut = "";
+        int _micVolPercent = 125;
+        bool _micEnabled;
+        bool _audioUiSync;
 
         // UI
         Panel _stage;
-        Label _liveBadge, _statusLbl, _vcamInfoLbl;
-        ComboBox _camCombo;
-        ToggleSwitch _enhSwitch, _bgSwitch, _splitSwitch;
+        Label _liveBadge, _statusLbl, _vcamInfoLbl, _micVolLbl, _micStatusLbl;
+        ComboBox _camCombo, _micInCombo, _micOutCombo;
+        ToggleSwitch _enhSwitch, _bgSwitch, _splitSwitch, _micSwitch;
+        TrackBar _micVolTrack;
         Timer _uiTimer;
 
         static readonly string SettingsPath = Path.Combine(
@@ -68,6 +77,7 @@ namespace AlapCamera
                 _vcam.Start();
                 UpdateVcamBadge();
                 RefreshCameras();
+                RefreshAudioDevices();
             };
             Resize += (s, e) => _minimized = (WindowState == FormWindowState.Minimized);
             FormClosing += OnFormClosing;
@@ -246,8 +256,105 @@ namespace AlapCamera
             c3.Controls.Add(tipBox);
 
             cardsScroll.Controls.Add(c3);
+            y += c3.Height + Theme.S(10);
 
-            // Card 4: Virtual Camera (Docked Bottom)
+            // Card 4: Mic Booster (0% - 200%)
+            var cMic = new StudioCard("4. Mic Booster (0% - 200%)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(224)) };
+            _micSwitch = new ToggleSwitch("Mic Input Booster", _micEnabled)
+            {
+                Location = new Point(Theme.S(12), Theme.S(28)),
+                Width = cw - Theme.S(24)
+            };
+            _micSwitch.CheckedChanged += (s, e) => ApplyAudioBooster();
+            cMic.Controls.Add(_micSwitch);
+
+            cMic.Controls.Add(new Label
+            {
+                Text = "Mic Input:",
+                Font = Theme.UI(8f),
+                ForeColor = Theme.Muted,
+                Location = new Point(Theme.S(12), Theme.S(60)),
+                Size = new Size(Theme.S(68), Theme.S(22)),
+                TextAlign = ContentAlignment.MiddleLeft
+            });
+            _micInCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Theme.Field,
+                ForeColor = Theme.Text,
+                FlatStyle = FlatStyle.Flat,
+                Font = Theme.UI(8.5f),
+                Location = new Point(Theme.S(82), Theme.S(60)),
+                Width = cw - Theme.S(94)
+            };
+            _micInCombo.SelectedIndexChanged += (s, e) => { if (!_audioUiSync && _micSwitch.Checked) ApplyAudioBooster(); };
+            cMic.Controls.Add(_micInCombo);
+
+            cMic.Controls.Add(new Label
+            {
+                Text = "Output Ke:",
+                Font = Theme.UI(8f),
+                ForeColor = Theme.Muted,
+                Location = new Point(Theme.S(12), Theme.S(90)),
+                Size = new Size(Theme.S(68), Theme.S(22)),
+                TextAlign = ContentAlignment.MiddleLeft
+            });
+            _micOutCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Theme.Field,
+                ForeColor = Theme.Text,
+                FlatStyle = FlatStyle.Flat,
+                Font = Theme.UI(8.5f),
+                Location = new Point(Theme.S(82), Theme.S(90)),
+                Width = cw - Theme.S(94)
+            };
+            _micOutCombo.SelectedIndexChanged += (s, e) => { if (!_audioUiSync && _micSwitch.Checked) ApplyAudioBooster(); };
+            cMic.Controls.Add(_micOutCombo);
+
+            _micVolLbl = new Label
+            {
+                Text = "Volume: " + _micVolPercent + "%",
+                Font = Theme.UI(8.5f, FontStyle.Bold),
+                ForeColor = Theme.Text,
+                Location = new Point(Theme.S(12), Theme.S(120)),
+                Size = new Size(cw - Theme.S(24), Theme.S(18))
+            };
+            cMic.Controls.Add(_micVolLbl);
+
+            _micVolTrack = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 200,
+                SmallChange = 5,
+                LargeChange = 20,
+                TickFrequency = 25,
+                Value = Math.Max(0, Math.Min(200, _micVolPercent)),
+                BackColor = Theme.Card,
+                Location = new Point(Theme.S(8), Theme.S(138)),
+                Size = new Size(cw - Theme.S(16), Theme.S(34))
+            };
+            _micVolTrack.ValueChanged += (s, e) =>
+            {
+                _micVolPercent = _micVolTrack.Value;
+                _audio.VolumePercent = _micVolPercent;
+                _micVolLbl.Text = "Volume: " + _micVolPercent + "%";
+            };
+            cMic.Controls.Add(_micVolTrack);
+
+            _micStatusLbl = new Label
+            {
+                Text = "Nonaktif (0% CPU) - nyalakan jika mic terasa kecil.",
+                Font = Theme.UI(7.8f),
+                ForeColor = Theme.Muted,
+                Location = new Point(Theme.S(12), Theme.S(176)),
+                Size = new Size(cw - Theme.S(24), Theme.S(38))
+            };
+            cMic.Controls.Add(_micStatusLbl);
+
+            cardsScroll.Controls.Add(cMic);
+
+            // Card 5: Virtual Camera (Docked Bottom)
             var c4 = new StudioCard("Virtual Camera (Auto-Start)")
             {
                 Dock = DockStyle.Bottom,
@@ -347,6 +454,96 @@ namespace AlapCamera
                     if (_devices[i].Name == _preferredCam) { idx = i; break; }
             }
             _camCombo.SelectedIndex = idx;
+        }
+
+        void RefreshAudioDevices()
+        {
+            _audioUiSync = true;
+            try
+            {
+                _micInputs = AudioBooster.ListInputs();
+                _micOutputs = AudioBooster.ListOutputs();
+
+                _micInCombo.Items.Clear();
+                foreach (var d in _micInputs) _micInCombo.Items.Add(d);
+
+                _micOutCombo.Items.Clear();
+                foreach (var d in _micOutputs) _micOutCombo.Items.Add(d);
+
+                if (_micInputs.Count > 0)
+                {
+                    int inIdx = 0;
+                    for (int i = 0; i < _micInputs.Count; i++)
+                    {
+                        string n = _micInputs[i].Name ?? "";
+                        if (!n.Contains("Virtual Mic") && !n.Contains("CABLE Output")) { inIdx = i; break; }
+                    }
+                    if (!string.IsNullOrEmpty(_preferredMicIn))
+                    {
+                        for (int i = 0; i < _micInputs.Count; i++)
+                            if (_micInputs[i].Name == _preferredMicIn) { inIdx = i; break; }
+                    }
+                    _micInCombo.SelectedIndex = inIdx;
+                }
+
+                if (_micOutputs.Count > 0)
+                {
+                    int outIdx = 0;
+                    for (int i = 0; i < _micOutputs.Count; i++)
+                    {
+                        string n = _micOutputs[i].Name ?? "";
+                        if (n.Contains("Virtual Speakers") || n.Contains("CABLE Input") || n.Contains("VoiceMeeter")) { outIdx = i; break; }
+                    }
+                    if (!string.IsNullOrEmpty(_preferredMicOut))
+                    {
+                        for (int i = 0; i < _micOutputs.Count; i++)
+                            if (_micOutputs[i].Name == _preferredMicOut) { outIdx = i; break; }
+                    }
+                    _micOutCombo.SelectedIndex = outIdx;
+                }
+            }
+            finally { _audioUiSync = false; }
+
+            if (_micEnabled) ApplyAudioBooster();
+        }
+
+        void ApplyAudioBooster()
+        {
+            if (_micSwitch == null) return;
+            _micEnabled = _micSwitch.Checked;
+            if (!_micEnabled)
+            {
+                _audio.Stop();
+                if (_micStatusLbl != null)
+                {
+                    _micStatusLbl.Text = "Nonaktif (0% CPU) - nyalakan jika mic terasa kecil.";
+                    _micStatusLbl.ForeColor = Theme.Muted;
+                }
+                return;
+            }
+
+            var inDev = _micInCombo.SelectedItem as AudioDeviceInfo;
+            var outDev = _micOutCombo.SelectedItem as AudioDeviceInfo;
+            if (inDev == null || outDev == null)
+            {
+                _micStatusLbl.Text = "Mic input atau output tidak ditemukan.";
+                _micStatusLbl.ForeColor = Theme.Danger;
+                _micSwitch.Checked = false;
+                return;
+            }
+
+            _audio.VolumePercent = _micVolTrack != null ? _micVolTrack.Value : _micVolPercent;
+            if (_audio.Start(inDev.Id, outDev.Id))
+            {
+                _micStatusLbl.Text = "Aktif -> Pilih 'Virtual Mic (AudioRelay)' / 'CABLE Output' di Streamlabs.";
+                _micStatusLbl.ForeColor = Theme.Green;
+            }
+            else
+            {
+                _micStatusLbl.Text = "Gagal: " + (_audio.LastError ?? "device audio tidak tersedia");
+                _micStatusLbl.ForeColor = Theme.Danger;
+                _micSwitch.Checked = false;
+            }
         }
 
         void StartSelectedCamera()
@@ -481,6 +678,10 @@ namespace AlapCamera
                 if (d.ContainsKey("enhance")) _proc.EnhanceEnabled = Convert.ToBoolean(d["enhance"]);
                 if (d.ContainsKey("bgEnabled")) _proc.BgEnabled = Convert.ToBoolean(d["bgEnabled"]);
                 _proc.Mode = BgMode.Cutout;
+                if (d.ContainsKey("micEnabled")) _micEnabled = Convert.ToBoolean(d["micEnabled"]);
+                if (d.ContainsKey("micVol")) _micVolPercent = Math.Max(0, Math.Min(200, Convert.ToInt32(d["micVol"])));
+                if (d.ContainsKey("micIn") && d["micIn"] != null) _preferredMicIn = d["micIn"].ToString();
+                if (d.ContainsKey("micOut") && d["micOut"] != null) _preferredMicOut = d["micOut"].ToString();
             }
             catch { }
         }
@@ -491,13 +692,19 @@ namespace AlapCamera
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
                 string cam = _camCombo.SelectedItem != null ? _camCombo.SelectedItem.ToString() : _preferredCam;
+                string micIn = _micInCombo != null && _micInCombo.SelectedItem != null ? _micInCombo.SelectedItem.ToString() : _preferredMicIn;
+                string micOut = _micOutCombo != null && _micOutCombo.SelectedItem != null ? _micOutCombo.SelectedItem.ToString() : _preferredMicOut;
                 var d = new Dictionary<string, object>
                 {
                     { "camera", cam },
                     { "mirror", _proc.Mirror },
                     { "enhance", _proc.EnhanceEnabled },
                     { "bgEnabled", _proc.BgEnabled },
-                    { "bgMode", _proc.Mode.ToString() }
+                    { "bgMode", _proc.Mode.ToString() },
+                    { "micEnabled", _micSwitch != null && _micSwitch.Checked },
+                    { "micVol", _micVolPercent },
+                    { "micIn", micIn },
+                    { "micOut", micOut }
                 };
                 File.WriteAllText(SettingsPath, new JavaScriptSerializer().Serialize(d));
             }
@@ -525,6 +732,7 @@ namespace AlapCamera
             {
                 if (_uiTimer != null) _uiTimer.Stop();
                 StopCamera();
+                _audio.Dispose();
                 _vcam.Dispose();
                 _proc.Dispose();
                 VirtualCam.UnregisterAll();
@@ -556,6 +764,7 @@ namespace AlapCamera
             if (!_uninstalling) SaveSettings();
             if (_uiTimer != null) _uiTimer.Stop();
             StopCamera();
+            _audio.Dispose();
             _vcam.Dispose();
             _proc.Dispose();
             if (_bmp != null) _bmp.Dispose();

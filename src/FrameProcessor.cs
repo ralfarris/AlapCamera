@@ -29,6 +29,8 @@ namespace AlapCamera
         float[] _maskSmooth; // 256*256 smoothed alpha [0..1]
         byte[] _smallRgb;    // 256*256*3
         byte[] _blurBuf;
+        byte[] _blurSmallA;
+        byte[] _blurSmallB;
         byte[] _prevBuf;
         byte[] _workBuf;
         byte[] _rawCopy;
@@ -554,37 +556,100 @@ namespace AlapCamera
             }
         }
 
-        static unsafe void FastBlur(byte[] src, byte[] dst, int w, int h)
+        unsafe void FastBlur(byte[] src, byte[] dst, int w, int h)
         {
-            // Fast 4x downsampled bokeh-like box blur
-            int bw = Math.Max(1, w / 8), bh = Math.Max(1, h / 8);
-            byte[] small = new byte[bw * bh * 3];
+            // Zero-alloc separable bokeh blur on 8x downsampled grid + bilinear upsample
+            int bw = Math.Max(4, w / 8), bh = Math.Max(4, h / 8);
+            int sLen = bw * bh * 3;
+            if (_blurSmallA == null || _blurSmallA.Length != sLen) _blurSmallA = new byte[sLen];
+            if (_blurSmallB == null || _blurSmallB.Length != sLen) _blurSmallB = new byte[sLen];
+
             fixed (byte* pS = src)
-            fixed (byte* pSm = small)
+            fixed (byte* pA = _blurSmallA)
+            fixed (byte* pB = _blurSmallB)
             fixed (byte* pD = dst)
             {
+                // 1) Downsample with 2x2 average to avoid aliasing shimmer
+                int stride = w * 3;
                 for (int y = 0; y < bh; y++)
                 {
-                    int sy = y * 8;
+                    int sy0 = (y * h) / bh;
+                    int sy1 = Math.Min(h - 1, sy0 + 2);
+                    byte* r0 = pS + sy0 * stride;
+                    byte* r1 = pS + sy1 * stride;
+                    byte* dRow = pA + y * bw * 3;
                     for (int x = 0; x < bw; x++)
                     {
-                        int sx = x * 8;
-                        int idx = (sy * w + sx) * 3;
-                        int o = (y * bw + x) * 3;
-                        pSm[o] = pS[idx];
-                        pSm[o + 1] = pS[idx + 1];
-                        pSm[o + 2] = pS[idx + 2];
+                        int sx0 = ((x * w) / bw) * 3;
+                        int sx1 = Math.Min(w - 1, (x * w) / bw + 2) * 3;
+                        dRow[0] = (byte)((r0[sx0] + r0[sx1] + r1[sx0] + r1[sx1] + 2) >> 2);
+                        dRow[1] = (byte)((r0[sx0 + 1] + r0[sx1 + 1] + r1[sx0 + 1] + r1[sx1 + 1] + 2) >> 2);
+                        dRow[2] = (byte)((r0[sx0 + 2] + r0[sx1 + 2] + r1[sx0 + 2] + r1[sx1 + 2] + 2) >> 2);
+                        dRow += 3;
                     }
                 }
+
+                // 2) Two passes of 5-tap separable box blur (radius 2 on 1/8th grid = effective 32px creamy bokeh)
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    // Horizontal: pA -> pB
+                    for (int y = 0; y < bh; y++)
+                    {
+                        byte* sRow = pA + y * bw * 3;
+                        byte* dRow = pB + y * bw * 3;
+                        for (int x = 0; x < bw; x++)
+                        {
+                            int xm2 = (x > 1 ? x - 2 : 0) * 3;
+                            int xm1 = (x > 0 ? x - 1 : 0) * 3;
+                            int x0 = x * 3;
+                            int xp1 = (x < bw - 1 ? x + 1 : bw - 1) * 3;
+                            int xp2 = (x < bw - 2 ? x + 2 : bw - 1) * 3;
+                            dRow[x0] = (byte)((sRow[xm2] + sRow[xm1] + sRow[x0] + sRow[xp1] + sRow[xp2] + 2) / 5);
+                            dRow[x0 + 1] = (byte)((sRow[xm2 + 1] + sRow[xm1 + 1] + sRow[x0 + 1] + sRow[xp1 + 1] + sRow[xp2 + 1] + 2) / 5);
+                            dRow[x0 + 2] = (byte)((sRow[xm2 + 2] + sRow[xm1 + 2] + sRow[x0 + 2] + sRow[xp1 + 2] + sRow[xp2 + 2] + 2) / 5);
+                        }
+                    }
+
+                    // Vertical: pB -> pA
+                    int bStride = bw * 3;
+                    for (int y = 0; y < bh; y++)
+                    {
+                        byte* rM2 = pB + (y > 1 ? y - 2 : 0) * bStride;
+                        byte* rM1 = pB + (y > 0 ? y - 1 : 0) * bStride;
+                        byte* r0 = pB + y * bStride;
+                        byte* rP1 = pB + (y < bh - 1 ? y + 1 : bh - 1) * bStride;
+                        byte* rP2 = pB + (y < bh - 2 ? y + 2 : bh - 1) * bStride;
+                        byte* dRow = pA + y * bStride;
+                        for (int i = 0; i < bStride; i++)
+                        {
+                            dRow[i] = (byte)((rM2[i] + rM1[i] + r0[i] + rP1[i] + rP2[i] + 2) / 5);
+                        }
+                    }
+                }
+
+                // 3) Bilinear upsample pA (bw x bh) -> pD (w x h) using fixed-point 8-bit weights
+                int bRowBytes = bw * 3;
                 for (int y = 0; y < h; y++)
                 {
-                    int sy = Math.Min(bh - 1, y / 8);
-                    byte* dRow = pD + y * w * 3;
+                    int gy = (y * (bh - 1) << 8) / Math.Max(1, h - 1);
+                    int y0 = gy >> 8;
+                    int y1 = y0 < bh - 1 ? y0 + 1 : bh - 1;
+                    int fy = gy & 255;
+                    int ify = 256 - fy;
+                    byte* s0 = pA + y0 * bRowBytes;
+                    byte* s1 = pA + y1 * bRowBytes;
+                    byte* dRow = pD + y * stride;
                     for (int x = 0; x < w; x++)
                     {
-                        int sx = Math.Min(bw - 1, x / 8);
-                        int o = (sy * bw + sx) * 3;
-                        dRow[0] = pSm[o]; dRow[1] = pSm[o + 1]; dRow[2] = pSm[o + 2];
+                        int gx = (x * (bw - 1) << 8) / Math.Max(1, w - 1);
+                        int x0 = (gx >> 8) * 3;
+                        int x1 = (x0 < bRowBytes - 3) ? x0 + 3 : bRowBytes - 3;
+                        int fx = gx & 255;
+                        int ifx = 256 - fx;
+                        int w00 = ifx * ify, w10 = fx * ify, w01 = ifx * fy, w11 = fx * fy;
+                        dRow[0] = (byte)((s0[x0] * w00 + s0[x1] * w10 + s1[x0] * w01 + s1[x1] * w11 + 32768) >> 16);
+                        dRow[1] = (byte)((s0[x0 + 1] * w00 + s0[x1 + 1] * w10 + s1[x0 + 1] * w01 + s1[x1 + 1] * w11 + 32768) >> 16);
+                        dRow[2] = (byte)((s0[x0 + 2] * w00 + s0[x1 + 2] * w10 + s1[x0 + 2] * w01 + s1[x1 + 2] * w11 + 32768) >> 16);
                         dRow += 3;
                     }
                 }

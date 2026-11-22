@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.5.0";
+        const string AppVersion = "0.5.1";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();
@@ -46,8 +46,6 @@ namespace AlapCamera
         IMessageFilter _wheelFilter;
         Label _liveBadge, _statusLbl, _vcamInfoLbl, _micVolLbl, _micStatusLbl;
         ComboBox _camCombo, _micInCombo;
-        FlatBtn _btnCutout, _btnBlur;
-        Label _bgTipBox;
         ToggleSwitch _enhSwitch, _bgSwitch, _splitSwitch, _micSwitch;
         TrackBar _micVolTrack;
         Timer _uiTimer;
@@ -223,9 +221,9 @@ namespace AlapCamera
             cardsScroll.Controls.Add(c2);
             y += c2.Height + Theme.S(10);
 
-            // Card 3: Erase / Blur Background
-            var c3 = new StudioCard("3. Erase / Blur Background") { Location = new Point(0, y), Size = new Size(cw, Theme.S(192)) };
-            _bgSwitch = new ToggleSwitch("Aktifkan Efek Background", _proc.BgEnabled)
+            // Card 3: Erase Background (PNG Cutout)
+            var c3 = new StudioCard("3. Erase Background (PNG Cutout)") { Location = new Point(0, y), Size = new Size(cw, Theme.S(154)) };
+            _bgSwitch = new ToggleSwitch("Erase Background (PNG)", _proc.BgEnabled)
             {
                 Location = new Point(Theme.S(12), Theme.S(28)),
                 Width = cw - Theme.S(24)
@@ -235,42 +233,24 @@ namespace AlapCamera
 
             c3.Controls.Add(new Label
             {
-                Text = "Hapus atau blur latar belakang otomatis dengan AI.",
+                Text = "Hapus latar belakang otomatis tanpa kain green screen.",
                 Font = Theme.UI(8f),
                 ForeColor = Theme.Muted,
                 Location = new Point(Theme.S(12), Theme.S(58)),
-                Size = new Size(cw - Theme.S(24), Theme.S(18))
+                Size = new Size(cw - Theme.S(24), Theme.S(20))
             });
 
-            int btnW = (cw - Theme.S(30)) / 2;
-            _btnCutout = new FlatBtn("PNG Cutout")
+            var tipBox = new Label
             {
-                Location = new Point(Theme.S(12), Theme.S(82)),
-                Size = new Size(btnW, Theme.S(30)),
-                Active = (_proc.Mode == BgMode.Cutout)
-            };
-            _btnBlur = new FlatBtn("Blur")
-            {
-                Location = new Point(Theme.S(18) + btnW, Theme.S(82)),
-                Size = new Size(btnW, Theme.S(30)),
-                Active = (_proc.Mode == BgMode.Blur)
-            };
-            _btnCutout.Click += (s, e) => SetBgMode(BgMode.Cutout);
-            _btnBlur.Click += (s, e) => SetBgMode(BgMode.Blur);
-            c3.Controls.Add(_btnCutout);
-            c3.Controls.Add(_btnBlur);
-
-            _bgTipBox = new Label
-            {
+                Text = "Tips Streamlabs/OBS: Klik kanan source AlapCamera di panel Sources -> Filters -> Edit Filters -> + -> Chroma Key (hijau).",
                 Font = Theme.UI(7.8f),
                 ForeColor = Theme.Green,
                 BackColor = Theme.GreenBg,
                 Padding = new Padding(Theme.S(6), Theme.S(6), Theme.S(6), Theme.S(6)),
-                Location = new Point(Theme.S(12), Theme.S(120)),
-                Size = new Size(cw - Theme.S(24), Theme.S(58))
+                Location = new Point(Theme.S(12), Theme.S(86)),
+                Size = new Size(cw - Theme.S(24), Theme.S(54))
             };
-            c3.Controls.Add(_bgTipBox);
-            SetBgMode(_proc.Mode);
+            c3.Controls.Add(tipBox);
 
             cardsScroll.Controls.Add(c3);
             y += c3.Height + Theme.S(10);
@@ -415,19 +395,6 @@ namespace AlapCamera
             _stage.Paint += OnStagePaint;
             stageWrap.Controls.Add(_stage);
             _stage.BringToFront();
-        }
-
-        void SetBgMode(BgMode mode)
-        {
-            _proc.Mode = mode;
-            if (_btnCutout != null) _btnCutout.Active = (mode == BgMode.Cutout);
-            if (_btnBlur != null) _btnBlur.Active = (mode == BgMode.Blur);
-            if (_bgTipBox != null)
-            {
-                _bgTipBox.Text = (mode == BgMode.Blur)
-                    ? "Mode Blur aktif: Latar belakang langsung blur otomatis di Streamlabs/OBS (matikan filter Chroma Key jika ada)."
-                    : "Tips Streamlabs/OBS: Klik kanan source AlapCamera di panel Sources -> Filters -> Edit Filters -> + -> Chroma Key (hijau).";
-            }
         }
 
         void UpdateVcamBadge()
@@ -627,7 +594,7 @@ namespace AlapCamera
             {
                 _stage.Invalidate();
                 string enh = _proc.EnhanceEnabled ? "  ·  AI Enhance ✓" : "";
-                string bg = _proc.BgEnabled ? (_proc.Mode == BgMode.Blur ? "  ·  BG Blur ✓" : "  ·  BG Cutout ✓") : "";
+                string bg = _proc.BgEnabled ? "  ·  BG Cutout ✓" : "";
                 _statusLbl.Text = string.Format("{0}×{1}  ·  {2:0.0} FPS{3}{4}", _previewW, _previewH, _fps, enh, bg);
             }
         }
@@ -669,7 +636,7 @@ namespace AlapCamera
                 _proc.Mirror = false;
                 if (d.ContainsKey("enhance")) _proc.EnhanceEnabled = Convert.ToBoolean(d["enhance"]);
                 if (d.ContainsKey("bgEnabled")) _proc.BgEnabled = Convert.ToBoolean(d["bgEnabled"]);
-                _proc.Mode = (d.ContainsKey("bgMode") && d["bgMode"] != null && d["bgMode"].ToString() == "Blur") ? BgMode.Blur : BgMode.Cutout;
+                _proc.Mode = BgMode.Cutout;
                 if (d.ContainsKey("micEnabled")) _micEnabled = Convert.ToBoolean(d["micEnabled"]);
                 if (d.ContainsKey("micVol")) _micVolPercent = Math.Max(0, Math.Min(200, Convert.ToInt32(d["micVol"])));
                 if (d.ContainsKey("micIn") && d["micIn"] != null) _preferredMicIn = d["micIn"].ToString();

@@ -7,6 +7,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCompany("AlapCamera")]
 [assembly: AssemblyProduct("AlapCamera")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 AlapCamera")]
-[assembly: AssemblyVersion("0.4.8.0")]
-[assembly: AssemblyFileVersion("0.4.8.0")]
+[assembly: AssemblyVersion("0.4.9.0")]
+[assembly: AssemblyFileVersion("0.4.9.0")]
 [assembly: ComVisible(false)]

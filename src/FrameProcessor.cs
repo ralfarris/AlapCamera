@@ -653,10 +653,15 @@ namespace AlapCamera
                     }
                 }
 
-                // 2) 4 passes of contiguous 7-tap (-3,-2,-1,0,+1,+2,+3) Gaussian-weighted (1,3,6,8,6,3,1) separable blur
+                // 2) 4-pass multi-scale À-Trous Gaussian bokeh (stride 1 -> stride 2 -> stride 2 -> stride 1)
+                // Pass 0 (stride 1) band-limits high frequencies; Passes 1-2 (stride 2) double the optical bokeh radius;
+                // Pass 3 (stride 1) polishes adjacent texels so zero pixel grid can ever appear.
                 int bStride = bw * 3;
                 for (int pass = 0; pass < 4; pass++)
                 {
+                    int step = (pass == 1 || pass == 2) ? 2 : 1;
+                    int s1 = step, s2 = step * 2, s3 = step * 3;
+
                     // Horizontal: (pA, pW0) -> (pB, pW1)
                     for (int y = 0; y < bh; y++)
                     {
@@ -666,13 +671,13 @@ namespace AlapCamera
                         byte* dwRow = pW1 + y * bw;
                         for (int x = 0; x < bw; x++)
                         {
-                            int i0 = x > 2 ? x - 3 : 0;
-                            int i1 = x > 1 ? x - 2 : 0;
-                            int i2 = x > 0 ? x - 1 : 0;
+                            int i0 = x >= s3 ? x - s3 : 0;
+                            int i1 = x >= s2 ? x - s2 : 0;
+                            int i2 = x >= s1 ? x - s1 : 0;
                             int i3 = x;
-                            int i4 = x < bw - 1 ? x + 1 : bw - 1;
-                            int i5 = x < bw - 2 ? x + 2 : bw - 1;
-                            int i6 = x < bw - 3 ? x + 3 : bw - 1;
+                            int i4 = x + s1 < bw ? x + s1 : bw - 1;
+                            int i5 = x + s2 < bw ? x + s2 : bw - 1;
+                            int i6 = x + s3 < bw ? x + s3 : bw - 1;
 
                             int w0 = swRow[i0];
                             int w1 = swRow[i1] * 3;
@@ -695,13 +700,13 @@ namespace AlapCamera
                     // Vertical: (pB, pW1) -> (pA, pW0)
                     for (int y = 0; y < bh; y++)
                     {
-                        int y0 = y > 2 ? y - 3 : 0;
-                        int y1 = y > 1 ? y - 2 : 0;
-                        int y2 = y > 0 ? y - 1 : 0;
+                        int y0 = y >= s3 ? y - s3 : 0;
+                        int y1 = y >= s2 ? y - s2 : 0;
+                        int y2 = y >= s1 ? y - s1 : 0;
                         int y3 = y;
-                        int y4 = y < bh - 1 ? y + 1 : bh - 1;
-                        int y5 = y < bh - 2 ? y + 2 : bh - 1;
-                        int y6 = y < bh - 3 ? y + 3 : bh - 1;
+                        int y4 = y + s1 < bh ? y + s1 : bh - 1;
+                        int y5 = y + s2 < bh ? y + s2 : bh - 1;
+                        int y6 = y + s3 < bh ? y + s3 : bh - 1;
 
                         byte* r0 = pB + y0 * bStride, r1 = pB + y1 * bStride, r2 = pB + y2 * bStride, r3 = pB + y3 * bStride, r4 = pB + y4 * bStride, r5 = pB + y5 * bStride, r6 = pB + y6 * bStride;
                         byte* wr0 = pW1 + y0 * bw, wr1 = pW1 + y1 * bw, wr2 = pW1 + y2 * bw, wr3 = pW1 + y3 * bw, wr4 = pW1 + y4 * bw, wr5 = pW1 + y5 * bw, wr6 = pW1 + y6 * bw;
@@ -727,7 +732,7 @@ namespace AlapCamera
                     }
                 }
 
-                // 3) Fused single-pass bilinear mask + bilinear bokeh upsample
+                // 3) Fused single-pass color-guided bilinear mask + bilinear bokeh upsample
                 float yMaskScale = (Mh - 1f) / Math.Max(1, h - 1);
                 int hDenom = Math.Max(1, h - 1);
                 for (int y = 0; y < h; y++)
@@ -780,6 +785,16 @@ namespace AlapCamera
                             }
                             else
                             {
+                                // Color-guided edge refinement: snap soft mask boundary to true high-res foreground/background edge
+                                int db = fRow[0] - bb; if (db < 0) db = -db;
+                                int dg = fRow[1] - bg; if (dg < 0) dg = -dg;
+                                int dr = fRow[2] - br; if (dr < 0) dr = -dr;
+                                int cDiff = db + dg + dr;
+                                if (cDiff > 96)
+                                    a = a + (1f - a) * 0.25f;
+                                else if (cDiff < 24)
+                                    a = a * 0.75f;
+
                                 float sa = a * a * (3f - 2f * a);
                                 float isa = 1f - sa;
                                 dRow[0] = (byte)(fRow[0] * sa + bb * isa);

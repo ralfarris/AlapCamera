@@ -12,7 +12,7 @@ namespace AlapCamera
 {
     sealed class MainForm : Form
     {
-        const string AppVersion = "0.4.7";
+        const string AppVersion = "0.4.8";
 
         readonly FrameProcessor _proc = new FrameProcessor();
         readonly VirtualCam _vcam = new VirtualCam();

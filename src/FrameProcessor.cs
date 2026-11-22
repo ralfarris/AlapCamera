@@ -27,6 +27,7 @@ namespace AlapCamera
         readonly float[] _aiMask = new float[Mw * Mh];
         byte[] _bgRef;       // 256*256*3 static background reference (fallback)
         float[] _maskSmooth; // 256*256 smoothed alpha [0..1]
+        float[] _maskTmp;    // 256*256 scratch for spatial 3x3 Gaussian feather
         byte[] _smallRgb;    // 256*256*3
         byte[] _blurBuf;
         byte[] _blurSmallA;
@@ -109,6 +110,7 @@ namespace AlapCamera
                                     float k = diff > 0.20f ? 0.95f : (diff > 0.08f ? 0.84f : 0.72f);
                                     _maskSmooth[i] = prev + (a - prev) * k;
                                 }
+                                SmoothMask3x3();
                             }
                         }
                     }
@@ -517,6 +519,40 @@ namespace AlapCamera
             }
         }
 
+        unsafe void SmoothMask3x3()
+        {
+            if (_maskSmooth == null || _maskSmooth.Length != Mw * Mh) return;
+            if (_maskTmp == null || _maskTmp.Length != Mw * Mh) _maskTmp = new float[Mw * Mh];
+
+            fixed (float* pS = _maskSmooth)
+            fixed (float* pT = _maskTmp)
+            {
+                // Horizontal [1, 2, 1] / 4
+                for (int y = 0; y < Mh; y++)
+                {
+                    float* sRow = pS + y * Mw;
+                    float* tRow = pT + y * Mw;
+                    tRow[0] = (sRow[0] * 3f + sRow[1]) * 0.25f;
+                    for (int x = 1; x < Mw - 1; x++)
+                        tRow[x] = (sRow[x - 1] + sRow[x] * 2f + sRow[x + 1]) * 0.25f;
+                    tRow[Mw - 1] = (sRow[Mw - 2] + sRow[Mw - 1] * 3f) * 0.25f;
+                }
+
+                // Vertical [1, 2, 1] / 4
+                for (int y = 0; y < Mh; y++)
+                {
+                    int ym1 = y > 0 ? y - 1 : 0;
+                    int yp1 = y < Mh - 1 ? y + 1 : Mh - 1;
+                    float* r0 = pT + ym1 * Mw;
+                    float* r1 = pT + y * Mw;
+                    float* r2 = pT + yp1 * Mw;
+                    float* dRow = pS + y * Mw;
+                    for (int x = 0; x < Mw; x++)
+                        dRow[x] = (r0[x] + r1[x] * 2f + r2[x]) * 0.25f;
+                }
+            }
+        }
+
         void EnsureBxLuts(int w, int bw)
         {
             if (_bx0 != null && _bxLutW == w && _bxLutBw == bw) return;
@@ -540,10 +576,9 @@ namespace AlapCamera
 
         unsafe void RenderBokehBlur(byte[] fg, byte[] dst, int w, int h)
         {
-            // Mask-weighted 3-pass Gaussian bokeh blur + single-pass bilinear composite.
-            // Excludes foreground pixels from bleeding into the background blur (no dark halo around head/hair).
+            // Contiguous 7-tap (-3..+3) 4-pass mask-weighted Gaussian bokeh on 1/4 grid (zero skipped neighbors -> zero pixel blocks!)
             EnsureMxLuts(w);
-            int bw = Math.Max(8, w / 6), bh = Math.Max(8, h / 6);
+            int bw = Math.Max(16, w / 4), bh = Math.Max(16, h / 4);
             EnsureBxLuts(w, bw);
 
             int sCells = bw * bh;
@@ -568,36 +603,59 @@ namespace AlapCamera
             fixed (int* pBx1 = _bx1)
             fixed (int* pBfx = _bfx)
             {
-                // 1) Downsample 2x2 average + compute background weight (255 = pure background, 1 = foreground)
+                // 1) True 4x4 area-average downsample into 1/4 grid + background mask weight (eliminates all subsampling pixel blocks)
                 for (int y = 0; y < bh; y++)
                 {
                     int sy0 = (y * h) / bh;
-                    int sy1 = Math.Min(h - 1, sy0 + 2);
-                    int my = (y * Mh) / bh;
+                    int sy1 = Math.Min(h - 1, sy0 + 1);
+                    int sy2 = Math.Min(h - 1, sy0 + 2);
+                    int sy3 = Math.Min(h - 1, sy0 + 3);
                     byte* r0 = pF + sy0 * stride;
                     byte* r1 = pF + sy1 * stride;
+                    byte* r2 = pF + sy2 * stride;
+                    byte* r3 = pF + sy3 * stride;
+
+                    int my = (y * Mh) / bh;
                     float* mRow = pM + my * Mw;
                     byte* dRow = pA + y * bw * 3;
                     byte* wRow = pW0 + y * bw;
+
                     for (int x = 0; x < bw; x++)
                     {
-                        int sx0 = ((x * w) / bw) * 3;
-                        int sx1 = Math.Min(w - 1, (x * w) / bw + 2) * 3;
-                        dRow[0] = (byte)((r0[sx0] + r0[sx1] + r1[sx0] + r1[sx1] + 2) >> 2);
-                        dRow[1] = (byte)((r0[sx0 + 1] + r0[sx1 + 1] + r1[sx0 + 1] + r1[sx1 + 1] + 2) >> 2);
-                        dRow[2] = (byte)((r0[sx0 + 2] + r0[sx1 + 2] + r1[sx0 + 2] + r1[sx1 + 2] + 2) >> 2);
+                        int xBase = (x * w) / bw;
+                        int sx0 = xBase * 3;
+                        int sx1 = Math.Min(w - 1, xBase + 1) * 3;
+                        int sx2 = Math.Min(w - 1, xBase + 2) * 3;
+                        int sx3 = Math.Min(w - 1, xBase + 3) * 3;
+
+                        int sumB = r0[sx0] + r0[sx1] + r0[sx2] + r0[sx3]
+                                 + r1[sx0] + r1[sx1] + r1[sx2] + r1[sx3]
+                                 + r2[sx0] + r2[sx1] + r2[sx2] + r2[sx3]
+                                 + r3[sx0] + r3[sx1] + r3[sx2] + r3[sx3];
+                        int sumG = r0[sx0 + 1] + r0[sx1 + 1] + r0[sx2 + 1] + r0[sx3 + 1]
+                                 + r1[sx0 + 1] + r1[sx1 + 1] + r1[sx2 + 1] + r1[sx3 + 1]
+                                 + r2[sx0 + 1] + r2[sx1 + 1] + r2[sx2 + 1] + r2[sx3 + 1]
+                                 + r3[sx0 + 1] + r3[sx1 + 1] + r3[sx2 + 1] + r3[sx3 + 1];
+                        int sumR = r0[sx0 + 2] + r0[sx1 + 2] + r0[sx2 + 2] + r0[sx3 + 2]
+                                 + r1[sx0 + 2] + r1[sx1 + 2] + r1[sx2 + 2] + r1[sx3 + 2]
+                                 + r2[sx0 + 2] + r2[sx1 + 2] + r2[sx2 + 2] + r2[sx3 + 2]
+                                 + r3[sx0 + 2] + r3[sx1 + 2] + r3[sx2 + 2] + r3[sx3 + 2];
+
+                        dRow[0] = (byte)((sumB + 8) >> 4);
+                        dRow[1] = (byte)((sumG + 8) >> 4);
+                        dRow[2] = (byte)((sumR + 8) >> 4);
 
                         float ma = mRow[(x * Mw) / bw];
-                        int bgW = (int)((1f - ma) * 254f) + 1; // 1..255 so division is never by zero
+                        int bgW = (int)((1f - ma) * 254f) + 1;
                         if (bgW < 1) bgW = 1; else if (bgW > 255) bgW = 255;
                         wRow[x] = (byte)bgW;
                         dRow += 3;
                     }
                 }
 
-                // 2) 3 passes of mask-weighted 5-tap separable blur (true Gaussian bokeh without foreground halo bleed)
+                // 2) 4 passes of contiguous 7-tap (-3,-2,-1,0,+1,+2,+3) Gaussian-weighted (1,3,6,8,6,3,1) separable blur
                 int bStride = bw * 3;
-                for (int pass = 0; pass < 3; pass++)
+                for (int pass = 0; pass < 4; pass++)
                 {
                     // Horizontal: (pA, pW0) -> (pB, pW1)
                     for (int y = 0; y < bh; y++)
@@ -608,45 +666,63 @@ namespace AlapCamera
                         byte* dwRow = pW1 + y * bw;
                         for (int x = 0; x < bw; x++)
                         {
-                            int i0 = x > 3 ? x - 4 : 0;
+                            int i0 = x > 2 ? x - 3 : 0;
                             int i1 = x > 1 ? x - 2 : 0;
-                            int i2 = x;
-                            int i3 = x < bw - 2 ? x + 2 : bw - 1;
-                            int i4 = x < bw - 4 ? x + 4 : bw - 1;
+                            int i2 = x > 0 ? x - 1 : 0;
+                            int i3 = x;
+                            int i4 = x < bw - 1 ? x + 1 : bw - 1;
+                            int i5 = x < bw - 2 ? x + 2 : bw - 1;
+                            int i6 = x < bw - 3 ? x + 3 : bw - 1;
 
-                            int w0 = swRow[i0], w1 = swRow[i1], w2 = swRow[i2] << 1, w3 = swRow[i3], w4 = swRow[i4];
-                            int wSum = w0 + w1 + w2 + w3 + w4;
-                            int o0 = i0 * 3, o1 = i1 * 3, o2 = i2 * 3, o3 = i3 * 3, o4 = i4 * 3;
+                            int w0 = swRow[i0];
+                            int w1 = swRow[i1] * 3;
+                            int w2 = swRow[i2] * 6;
+                            int w3 = swRow[i3] << 3;
+                            int w4 = swRow[i4] * 6;
+                            int w5 = swRow[i5] * 3;
+                            int w6 = swRow[i6];
+                            int wSum = w0 + w1 + w2 + w3 + w4 + w5 + w6;
+
+                            int o0 = i0 * 3, o1 = i1 * 3, o2 = i2 * 3, o3 = i3 * 3, o4 = i4 * 3, o5 = i5 * 3, o6 = i6 * 3;
                             int dx = x * 3;
-                            dRow[dx] = (byte)((sRow[o0] * w0 + sRow[o1] * w1 + sRow[o2] * w2 + sRow[o3] * w3 + sRow[o4] * w4 + (wSum >> 1)) / wSum);
-                            dRow[dx + 1] = (byte)((sRow[o0 + 1] * w0 + sRow[o1 + 1] * w1 + sRow[o2 + 1] * w2 + sRow[o3 + 1] * w3 + sRow[o4 + 1] * w4 + (wSum >> 1)) / wSum);
-                            dRow[dx + 2] = (byte)((sRow[o0 + 2] * w0 + sRow[o1 + 2] * w1 + sRow[o2 + 2] * w2 + sRow[o3 + 2] * w3 + sRow[o4 + 2] * w4 + (wSum >> 1)) / wSum);
-                            dwRow[x] = (byte)((wSum + 3) / 6);
+                            dRow[dx] = (byte)((sRow[o0] * w0 + sRow[o1] * w1 + sRow[o2] * w2 + sRow[o3] * w3 + sRow[o4] * w4 + sRow[o5] * w5 + sRow[o6] * w6 + (wSum >> 1)) / wSum);
+                            dRow[dx + 1] = (byte)((sRow[o0 + 1] * w0 + sRow[o1 + 1] * w1 + sRow[o2 + 1] * w2 + sRow[o3 + 1] * w3 + sRow[o4 + 1] * w4 + sRow[o5 + 1] * w5 + sRow[o6 + 1] * w6 + (wSum >> 1)) / wSum);
+                            dRow[dx + 2] = (byte)((sRow[o0 + 2] * w0 + sRow[o1 + 2] * w1 + sRow[o2 + 2] * w2 + sRow[o3 + 2] * w3 + sRow[o4 + 2] * w4 + sRow[o5 + 2] * w5 + sRow[o6 + 2] * w6 + (wSum >> 1)) / wSum);
+                            dwRow[x] = (byte)((wSum + 14) / 28);
                         }
                     }
 
                     // Vertical: (pB, pW1) -> (pA, pW0)
                     for (int y = 0; y < bh; y++)
                     {
-                        int y0 = y > 3 ? y - 4 : 0;
+                        int y0 = y > 2 ? y - 3 : 0;
                         int y1 = y > 1 ? y - 2 : 0;
-                        int y2 = y;
-                        int y3 = y < bh - 2 ? y + 2 : bh - 1;
-                        int y4 = y < bh - 4 ? y + 4 : bh - 1;
+                        int y2 = y > 0 ? y - 1 : 0;
+                        int y3 = y;
+                        int y4 = y < bh - 1 ? y + 1 : bh - 1;
+                        int y5 = y < bh - 2 ? y + 2 : bh - 1;
+                        int y6 = y < bh - 3 ? y + 3 : bh - 1;
 
-                        byte* r0 = pB + y0 * bStride, r1 = pB + y1 * bStride, r2 = pB + y2 * bStride, r3 = pB + y3 * bStride, r4 = pB + y4 * bStride;
-                        byte* wr0 = pW1 + y0 * bw, wr1 = pW1 + y1 * bw, wr2 = pW1 + y2 * bw, wr3 = pW1 + y3 * bw, wr4 = pW1 + y4 * bw;
+                        byte* r0 = pB + y0 * bStride, r1 = pB + y1 * bStride, r2 = pB + y2 * bStride, r3 = pB + y3 * bStride, r4 = pB + y4 * bStride, r5 = pB + y5 * bStride, r6 = pB + y6 * bStride;
+                        byte* wr0 = pW1 + y0 * bw, wr1 = pW1 + y1 * bw, wr2 = pW1 + y2 * bw, wr3 = pW1 + y3 * bw, wr4 = pW1 + y4 * bw, wr5 = pW1 + y5 * bw, wr6 = pW1 + y6 * bw;
                         byte* dRow = pA + y * bStride;
                         byte* dwRow = pW0 + y * bw;
                         for (int x = 0; x < bw; x++)
                         {
-                            int w0 = wr0[x], w1 = wr1[x], w2 = wr2[x] << 1, w3 = wr3[x], w4 = wr4[x];
-                            int wSum = w0 + w1 + w2 + w3 + w4;
+                            int w0 = wr0[x];
+                            int w1 = wr1[x] * 3;
+                            int w2 = wr2[x] * 6;
+                            int w3 = wr3[x] << 3;
+                            int w4 = wr4[x] * 6;
+                            int w5 = wr5[x] * 3;
+                            int w6 = wr6[x];
+                            int wSum = w0 + w1 + w2 + w3 + w4 + w5 + w6;
+
                             int ox = x * 3;
-                            dRow[ox] = (byte)((r0[ox] * w0 + r1[ox] * w1 + r2[ox] * w2 + r3[ox] * w3 + r4[ox] * w4 + (wSum >> 1)) / wSum);
-                            dRow[ox + 1] = (byte)((r0[ox + 1] * w0 + r1[ox + 1] * w1 + r2[ox + 1] * w2 + r3[ox + 1] * w3 + r4[ox + 1] * w4 + (wSum >> 1)) / wSum);
-                            dRow[ox + 2] = (byte)((r0[ox + 2] * w0 + r1[ox + 2] * w1 + r2[ox + 2] * w2 + r3[ox + 2] * w3 + r4[ox + 2] * w4 + (wSum >> 1)) / wSum);
-                            dwRow[x] = (byte)((wSum + 3) / 6);
+                            dRow[ox] = (byte)((r0[ox] * w0 + r1[ox] * w1 + r2[ox] * w2 + r3[ox] * w3 + r4[ox] * w4 + r5[ox] * w5 + r6[ox] * w6 + (wSum >> 1)) / wSum);
+                            dRow[ox + 1] = (byte)((r0[ox + 1] * w0 + r1[ox + 1] * w1 + r2[ox + 1] * w2 + r3[ox + 1] * w3 + r4[ox + 1] * w4 + r5[ox + 1] * w5 + r6[ox + 1] * w6 + (wSum >> 1)) / wSum);
+                            dRow[ox + 2] = (byte)((r0[ox + 2] * w0 + r1[ox + 2] * w1 + r2[ox + 2] * w2 + r3[ox + 2] * w3 + r4[ox + 2] * w4 + r5[ox + 2] * w5 + r6[ox + 2] * w6 + (wSum >> 1)) / wSum);
+                            dwRow[x] = (byte)((wSum + 14) / 28);
                         }
                     }
                 }
@@ -681,7 +757,7 @@ namespace AlapCamera
                         float mfx = pMfx[x], invMfx = 1f - mfx;
                         float a = (m0[mx0] * invMfx + m0[mx1] * mfx) * invMfy + (m1[mx0] * invMfx + m1[mx1] * mfx) * mfy;
 
-                        if (a > 0.97f)
+                        if (a > 0.98f)
                         {
                             dRow[0] = fRow[0];
                             dRow[1] = fRow[1];
@@ -696,7 +772,7 @@ namespace AlapCamera
                             int bg = (s0[bx0 + 1] * w00 + s0[bx1 + 1] * w10 + s1[bx0 + 1] * w01 + s1[bx1 + 1] * w11 + 32768) >> 16;
                             int br = (s0[bx0 + 2] * w00 + s0[bx1 + 2] * w10 + s1[bx0 + 2] * w01 + s1[bx1 + 2] * w11 + 32768) >> 16;
 
-                            if (a < 0.03f)
+                            if (a < 0.02f)
                             {
                                 dRow[0] = (byte)bb;
                                 dRow[1] = (byte)bg;
@@ -704,7 +780,6 @@ namespace AlapCamera
                             }
                             else
                             {
-                                // Smoothstep feathering on edge transition
                                 float sa = a * a * (3f - 2f * a);
                                 float isa = 1f - sa;
                                 dRow[0] = (byte)(fRow[0] * sa + bb * isa);

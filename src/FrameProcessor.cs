@@ -27,7 +27,8 @@ namespace AlapCamera
         readonly float[] _aiMask = new float[Mw * Mh];
         byte[] _bgRef;       // 256*256*3 static background reference (fallback)
         float[] _maskSmooth; // 256*256 smoothed alpha [0..1]
-        float[] _maskTmp;    // 256*256 scratch for spatial 3x3 Gaussian feather
+        float[] _maskTmp;    // 256*256 scratch for guided filter
+        byte[] _maskLuma;    // 256*256 luma guide for 5x5 edge-preserving mask refinement
         byte[] _smallRgb;    // 256*256*3
         byte[] _blurBuf;
         byte[] _blurSmallA;
@@ -110,7 +111,7 @@ namespace AlapCamera
                                     float k = diff > 0.20f ? 0.95f : (diff > 0.08f ? 0.84f : 0.72f);
                                     _maskSmooth[i] = prev + (a - prev) * k;
                                 }
-                                SmoothMask3x3();
+                                RefineMaskGuided5x5(_workBuf, w, h);
                             }
                         }
                     }
@@ -519,36 +520,89 @@ namespace AlapCamera
             }
         }
 
-        unsafe void SmoothMask3x3()
+        unsafe void RefineMaskGuided5x5(byte[] bgr, int w, int h)
         {
             if (_maskSmooth == null || _maskSmooth.Length != Mw * Mh) return;
             if (_maskTmp == null || _maskTmp.Length != Mw * Mh) _maskTmp = new float[Mw * Mh];
+            if (_maskLuma == null || _maskLuma.Length != Mw * Mh) _maskLuma = new byte[Mw * Mh];
 
+            int stride = w * 3;
+            fixed (byte* pBgr = bgr)
+            fixed (byte* pL = _maskLuma)
             fixed (float* pS = _maskSmooth)
             fixed (float* pT = _maskTmp)
             {
-                // Horizontal [1, 2, 1] / 4
+                // 1) Extract 256x256 luma guide from current frame
+                for (int y = 0; y < Mh; y++)
+                {
+                    byte* sRow = pBgr + ((y * h) / Mh) * stride;
+                    byte* lRow = pL + y * Mw;
+                    for (int x = 0; x < Mw; x++)
+                    {
+                        byte* px = sRow + ((x * w) / Mw) * 3;
+                        lRow[x] = (byte)((px[0] * 29 + px[1] * 150 + px[2] * 77) >> 8);
+                    }
+                }
+
+                // 2) Separable 5-tap Luma-Guided Joint Bilateral filter on 256x256 mask
+                // Preserves sharp edges where luma changes while smoothing staircase noise where luma is uniform
                 for (int y = 0; y < Mh; y++)
                 {
                     float* sRow = pS + y * Mw;
                     float* tRow = pT + y * Mw;
-                    tRow[0] = (sRow[0] * 3f + sRow[1]) * 0.25f;
-                    for (int x = 1; x < Mw - 1; x++)
-                        tRow[x] = (sRow[x - 1] + sRow[x] * 2f + sRow[x + 1]) * 0.25f;
-                    tRow[Mw - 1] = (sRow[Mw - 2] + sRow[Mw - 1] * 3f) * 0.25f;
+                    byte* lRow = pL + y * Mw;
+                    for (int x = 0; x < Mw; x++)
+                    {
+                        float cVal = sRow[x];
+                        if (cVal <= 0.01f || cVal >= 0.99f) { tRow[x] = cVal; continue; }
+                        int cLum = lRow[x];
+                        int x0 = x > 1 ? x - 2 : 0;
+                        int x1 = x > 0 ? x - 1 : 0;
+                        int x3 = x < Mw - 1 ? x + 1 : Mw - 1;
+                        int x4 = x < Mw - 2 ? x + 2 : Mw - 1;
+
+                        int d0 = cLum - lRow[x0]; if (d0 < 0) d0 = -d0;
+                        int d1 = cLum - lRow[x1]; if (d1 < 0) d1 = -d1;
+                        int d3 = cLum - lRow[x3]; if (d3 < 0) d3 = -d3;
+                        int d4 = cLum - lRow[x4]; if (d4 < 0) d4 = -d4;
+
+                        float w0 = 1f / (1f + d0 * 0.12f);
+                        float w1 = 2f / (1f + d1 * 0.12f);
+                        float w2 = 3f;
+                        float w3 = 2f / (1f + d3 * 0.12f);
+                        float w4 = 1f / (1f + d4 * 0.12f);
+                        float wSum = w0 + w1 + w2 + w3 + w4;
+                        tRow[x] = (sRow[x0] * w0 + sRow[x1] * w1 + cVal * w2 + sRow[x3] * w3 + sRow[x4] * w4) / wSum;
+                    }
                 }
 
-                // Vertical [1, 2, 1] / 4
                 for (int y = 0; y < Mh; y++)
                 {
-                    int ym1 = y > 0 ? y - 1 : 0;
-                    int yp1 = y < Mh - 1 ? y + 1 : Mh - 1;
-                    float* r0 = pT + ym1 * Mw;
-                    float* r1 = pT + y * Mw;
-                    float* r2 = pT + yp1 * Mw;
+                    int y0 = y > 1 ? y - 2 : 0;
+                    int y1 = y > 0 ? y - 1 : 0;
+                    int y3 = y < Mh - 1 ? y + 1 : Mh - 1;
+                    int y4 = y < Mh - 2 ? y + 2 : Mh - 1;
+                    float* r0 = pT + y0 * Mw, r1 = pT + y1 * Mw, r2 = pT + y * Mw, r3 = pT + y3 * Mw, r4 = pT + y4 * Mw;
+                    byte* l0 = pL + y0 * Mw, l1 = pL + y1 * Mw, l2 = pL + y * Mw, l3 = pL + y3 * Mw, l4 = pL + y4 * Mw;
                     float* dRow = pS + y * Mw;
                     for (int x = 0; x < Mw; x++)
-                        dRow[x] = (r0[x] + r1[x] * 2f + r2[x]) * 0.25f;
+                    {
+                        float cVal = r2[x];
+                        if (cVal <= 0.01f || cVal >= 0.99f) { dRow[x] = cVal; continue; }
+                        int cLum = l2[x];
+                        int d0 = cLum - l0[x]; if (d0 < 0) d0 = -d0;
+                        int d1 = cLum - l1[x]; if (d1 < 0) d1 = -d1;
+                        int d3 = cLum - l3[x]; if (d3 < 0) d3 = -d3;
+                        int d4 = cLum - l4[x]; if (d4 < 0) d4 = -d4;
+
+                        float w0 = 1f / (1f + d0 * 0.12f);
+                        float w1 = 2f / (1f + d1 * 0.12f);
+                        float w2 = 3f;
+                        float w3 = 2f / (1f + d3 * 0.12f);
+                        float w4 = 1f / (1f + d4 * 0.12f);
+                        float wSum = w0 + w1 + w2 + w3 + w4;
+                        dRow[x] = (r0[x] * w0 + r1[x] * w1 + cVal * w2 + r3[x] * w3 + r4[x] * w4) / wSum;
+                    }
                 }
             }
         }
@@ -576,9 +630,9 @@ namespace AlapCamera
 
         unsafe void RenderBokehBlur(byte[] fg, byte[] dst, int w, int h)
         {
-            // Contiguous 7-tap (-3..+3) 4-pass mask-weighted Gaussian bokeh on 1/4 grid (zero skipped neighbors -> zero pixel blocks!)
+            // High-density 1/2 HD grid (bw = w/2, bh = h/2 -> 4x denser samples) + 5-pass multi-scale A-Trous Gaussian bokeh
             EnsureMxLuts(w);
-            int bw = Math.Max(16, w / 4), bh = Math.Max(16, h / 4);
+            int bw = Math.Max(16, w / 2), bh = Math.Max(16, h / 2);
             EnsureBxLuts(w, bw);
 
             int sCells = bw * bh;
@@ -603,17 +657,14 @@ namespace AlapCamera
             fixed (int* pBx1 = _bx1)
             fixed (int* pBfx = _bfx)
             {
-                // 1) True 4x4 area-average downsample into 1/4 grid + background mask weight (eliminates all subsampling pixel blocks)
+                // 1) True 2x2 area-average downsample into 1/2 HD grid + background mask weight
                 for (int y = 0; y < bh; y++)
                 {
-                    int sy0 = (y * h) / bh;
-                    int sy1 = Math.Min(h - 1, sy0 + 1);
-                    int sy2 = Math.Min(h - 1, sy0 + 2);
-                    int sy3 = Math.Min(h - 1, sy0 + 3);
+                    int sy0 = y * 2;
+                    if (sy0 >= h) sy0 = h - 1;
+                    int sy1 = sy0 + 1 < h ? sy0 + 1 : sy0;
                     byte* r0 = pF + sy0 * stride;
                     byte* r1 = pF + sy1 * stride;
-                    byte* r2 = pF + sy2 * stride;
-                    byte* r3 = pF + sy3 * stride;
 
                     int my = (y * Mh) / bh;
                     float* mRow = pM + my * Mw;
@@ -622,28 +673,14 @@ namespace AlapCamera
 
                     for (int x = 0; x < bw; x++)
                     {
-                        int xBase = (x * w) / bw;
+                        int xBase = x * 2;
+                        if (xBase >= w) xBase = w - 1;
                         int sx0 = xBase * 3;
-                        int sx1 = Math.Min(w - 1, xBase + 1) * 3;
-                        int sx2 = Math.Min(w - 1, xBase + 2) * 3;
-                        int sx3 = Math.Min(w - 1, xBase + 3) * 3;
+                        int sx1 = (xBase + 1 < w ? xBase + 1 : xBase) * 3;
 
-                        int sumB = r0[sx0] + r0[sx1] + r0[sx2] + r0[sx3]
-                                 + r1[sx0] + r1[sx1] + r1[sx2] + r1[sx3]
-                                 + r2[sx0] + r2[sx1] + r2[sx2] + r2[sx3]
-                                 + r3[sx0] + r3[sx1] + r3[sx2] + r3[sx3];
-                        int sumG = r0[sx0 + 1] + r0[sx1 + 1] + r0[sx2 + 1] + r0[sx3 + 1]
-                                 + r1[sx0 + 1] + r1[sx1 + 1] + r1[sx2 + 1] + r1[sx3 + 1]
-                                 + r2[sx0 + 1] + r2[sx1 + 1] + r2[sx2 + 1] + r2[sx3 + 1]
-                                 + r3[sx0 + 1] + r3[sx1 + 1] + r3[sx2 + 1] + r3[sx3 + 1];
-                        int sumR = r0[sx0 + 2] + r0[sx1 + 2] + r0[sx2 + 2] + r0[sx3 + 2]
-                                 + r1[sx0 + 2] + r1[sx1 + 2] + r1[sx2 + 2] + r1[sx3 + 2]
-                                 + r2[sx0 + 2] + r2[sx1 + 2] + r2[sx2 + 2] + r2[sx3 + 2]
-                                 + r3[sx0 + 2] + r3[sx1 + 2] + r3[sx2 + 2] + r3[sx3 + 2];
-
-                        dRow[0] = (byte)((sumB + 8) >> 4);
-                        dRow[1] = (byte)((sumG + 8) >> 4);
-                        dRow[2] = (byte)((sumR + 8) >> 4);
+                        dRow[0] = (byte)((r0[sx0] + r0[sx1] + r1[sx0] + r1[sx1] + 2) >> 2);
+                        dRow[1] = (byte)((r0[sx0 + 1] + r0[sx1 + 1] + r1[sx0 + 1] + r1[sx1 + 1] + 2) >> 2);
+                        dRow[2] = (byte)((r0[sx0 + 2] + r0[sx1 + 2] + r1[sx0 + 2] + r1[sx1 + 2] + 2) >> 2);
 
                         float ma = mRow[(x * Mw) / bw];
                         int bgW = (int)((1f - ma) * 254f) + 1;
@@ -653,13 +690,12 @@ namespace AlapCamera
                     }
                 }
 
-                // 2) 4-pass multi-scale À-Trous Gaussian bokeh (stride 1 -> stride 2 -> stride 2 -> stride 1)
-                // Pass 0 (stride 1) band-limits high frequencies; Passes 1-2 (stride 2) double the optical bokeh radius;
-                // Pass 3 (stride 1) polishes adjacent texels so zero pixel grid can ever appear.
+                // 2) 5-pass multi-scale A-Trous Gaussian bokeh on 1/2 HD grid (strides: 1 -> 2 -> 4 -> 2 -> 1)
                 int bStride = bw * 3;
-                for (int pass = 0; pass < 4; pass++)
+                int[] steps = new int[] { 1, 2, 4, 2, 1 };
+                for (int pass = 0; pass < 5; pass++)
                 {
-                    int step = (pass == 1 || pass == 2) ? 2 : 1;
+                    int step = steps[pass];
                     int s1 = step, s2 = step * 2, s3 = step * 3;
 
                     // Horizontal: (pA, pW0) -> (pB, pW1)
@@ -785,7 +821,6 @@ namespace AlapCamera
                             }
                             else
                             {
-                                // Color-guided edge refinement: snap soft mask boundary to true high-res foreground/background edge
                                 int db = fRow[0] - bb; if (db < 0) db = -db;
                                 int dg = fRow[1] - bg; if (dg < 0) dg = -dg;
                                 int dr = fRow[2] - br; if (dr < 0) dr = -dr;

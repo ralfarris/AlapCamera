@@ -263,8 +263,9 @@ namespace AlapCamera
 
                 const int plane = ModelWidth * ModelHeight;
                 const int plane2 = plane * 2;
-                const float inv255 = 1.0f / 255.0f;
+                const float inv1020 = 1.0f / 1020.0f; // 4 samples * 255
                 int stride = w * 3;
+                int maxOff = (w - 1) * 3;
 
                 fixed (byte* pBgr = bgr)
                 fixed (float* pNchw = _nchw)
@@ -272,17 +273,25 @@ namespace AlapCamera
                 {
                     for (int y = 0; y < ModelHeight; y++)
                     {
-                        byte* sRow = pBgr + ((y * h) / ModelHeight) * stride;
+                        int sy0 = (y * h) / ModelHeight;
+                        int sy1 = sy0 + 1 < h ? sy0 + 1 : sy0;
+                        byte* sRow0 = pBgr + sy0 * stride;
+                        byte* sRow1 = pBgr + sy1 * stride;
                         int dstRow = y * ModelWidth;
                         float* dR = pNchw + dstRow;
                         float* dG = pNchw + plane + dstRow;
                         float* dB = pNchw + plane2 + dstRow;
                         for (int x = 0; x < ModelWidth; x++)
                         {
-                            byte* px = sRow + pLut[x];
-                            dR[x] = px[2] * inv255;
-                            dG[x] = px[1] * inv255;
-                            dB[x] = px[0] * inv255;
+                            int ox0 = pLut[x];
+                            int ox1 = ox0 + 3 <= maxOff ? ox0 + 3 : ox0;
+                            byte* p00 = sRow0 + ox0;
+                            byte* p10 = sRow0 + ox1;
+                            byte* p01 = sRow1 + ox0;
+                            byte* p11 = sRow1 + ox1;
+                            dB[x] = (p00[0] + p10[0] + p01[0] + p11[0]) * inv1020;
+                            dG[x] = (p00[1] + p10[1] + p01[1] + p11[1]) * inv1020;
+                            dR[x] = (p00[2] + p10[2] + p01[2] + p11[2]) * inv1020;
                         }
                     }
                 }
